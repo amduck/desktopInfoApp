@@ -1,0 +1,3 @@
+pywebview>=6.2
+pywin32
+pillow
