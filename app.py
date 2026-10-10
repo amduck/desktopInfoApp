@@ -24,6 +24,7 @@ import json
 import logging
 import logging.handlers
 import os
+import random
 import re
 import threading
 import time
@@ -48,8 +49,10 @@ TIMEZONE = "Australia/Sydney"
 # polling faster than every few minutes only re-downloads the same numbers.
 WEATHER_REFRESH_S = 600           # 10 minutes
 NEWS_REFRESH_S = 1800             # 30 minutes
-GALLERY_REFRESH_S = 86400         # images are static; re-check daily
-GALLERY_CACHE_MAX_AGE_S = 7 * 86400
+GALLERY_REFRESH_S = 1200          # new set of images every 20 minutes
+GALLERY_SET_SIZE = 5
+GALLERY_HISTORY = 300             # don't repeat any of the last N images shown
+GALLERY_CACHE_MAX_AGE_S = 7 * 86400   # offline fallback images
 RETRY_MIN_S = 30                  # first retry after a failure
 NEWS_POOL_CAP = 40
 NEWS_AGE_CAP_HRS = 48
@@ -76,8 +79,16 @@ NEWS_FEEDS = [
     ("Tech", "https://techcrunch.com/feed/"),
 ]
 
-# (article_url, image_url, caption)
-GALLERY = [
+# Live gallery source: Wikimedia Commons "Featured pictures" (~18,000
+# community-vetted images; key-less API). Wikimedia asks API clients to send
+# a descriptive User-Agent.
+COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+COMMONS_CATEGORY = "Category:Featured pictures on Wikimedia Commons"
+WIKIMEDIA_UA = "LaneCoveInfoPanel/1.1 (personal desktop dashboard; Python urllib)"
+GALLERY_THUMB_W = 960             # one of Wikimedia's standard thumbnail widths
+
+# Offline fallback when Commons can't be reached: (article_url, image_url, caption)
+GALLERY_FALLBACK = [
     ("https://en.wikipedia.org/wiki/Sydney",
      "https://commons.wikimedia.org/wiki/Special:FilePath/Sydney_Opera_House_and_Harbour_Bridge_Dusk_%282%29_2019-06-21.jpg?width=800",
      "Sydney at dusk — the Opera House sails with the Harbour Bridge behind."),
@@ -181,8 +192,8 @@ class PolledStore:
 
 
 # ----------------------------------------------------------------- weather
-def _http_get(url, accept, to=15, limit=None):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
+def _http_get(url, accept, to=15, limit=None, ua=USER_AGENT):
+    req = urllib.request.Request(url, headers={"User-Agent": ua, "Accept": accept})
     with urllib.request.urlopen(req, timeout=to) as r:
         return r.read(limit) if limit else r.read()
 
@@ -348,12 +359,12 @@ def _cache_path(url):
     return os.path.join(CACHE_DIR, hashlib.sha1(url.encode()).hexdigest() + ".jpg")
 
 
-def _download_jpeg(url, to=25):
-    """Download, re-encode as <=800 px JPEG q82, return bytes."""
+def _download_jpeg(url, to=25, max_px=GALLERY_THUMB_W):
+    """Download, re-encode as <=max_px JPEG q82, return bytes."""
     from PIL import Image, ImageOps
-    raw = _http_get(url, "image/*", to=to, limit=6 * 1024 * 1024)
+    raw = _http_get(url, "image/*", to=to, limit=8 * 1024 * 1024, ua=WIKIMEDIA_UA)
     im = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-    im.thumbnail((800, 800), Image.LANCZOS)
+    im.thumbnail((max_px, max_px), Image.LANCZOS)
     buf = io.BytesIO()
     im.save(buf, format="JPEG", quality=82, optimize=True)
     return buf.getvalue()
@@ -380,21 +391,139 @@ def _gallery_image(url):
         return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("ascii")
 
 
-def gallery_fetch_once():
+def _strip_html(h, limit=None):
+    """Plain text from an extmetadata HTML fragment."""
+    t = re.sub(r"<[^>]+>", " ", h or "")
+    t = re.sub(r"\s+", " ", sax.unescape(t.replace("&nbsp;", " "))).strip()
+    if limit and len(t) > limit:
+        cut = t[:limit].rsplit(" ", 1)[0].rstrip(",;:-–— ")
+        t = cut + "…"
+    return t
+
+
+def _caption_from(title, meta):
+    """Prefer the first sentence of the English description, else the
+    object name, else the file name."""
+    desc = _strip_html((meta.get("ImageDescription") or {}).get("value"))
+    if desc:
+        m = re.match(r"(.{25,}?[.!?])\s", desc + " ")
+        desc = m.group(1) if m else desc
+    name = _strip_html((meta.get("ObjectName") or {}).get("value"))
+    fallback = re.sub(r"\.[A-Za-z0-9]+$", "", title.split(":", 1)[-1]).replace("_", " ")
+    text = desc or name or fallback
+    return _strip_html(text, 170)
+
+
+def parse_commons_batch(raw, exclude=()):
+    """Candidate images from a Commons API response: raster photos, at least
+    1200 px wide, landscape-ish (they fill a landscape card), not shown recently."""
+    out = []
+    for page in (raw.get("query") or {}).get("pages", []):
+        title = page.get("title", "")
+        info = (page.get("imageinfo") or [None])[0]
+        if not title.startswith("File:") or not info or title in exclude:
+            continue
+        w, h = info.get("width") or 0, info.get("height") or 0
+        if info.get("mime") not in ("image/jpeg", "image/png", "image/webp"):
+            continue
+        if w < 1200 or not h or not (1.15 <= w / h <= 2.6):
+            continue
+        if not info.get("thumburl") or not info.get("descriptionurl"):
+            continue
+        meta = info.get("extmetadata") or {}
+        artist = _strip_html((meta.get("Artist") or {}).get("value"), 60)
+        licence = _strip_html((meta.get("LicenseShortName") or {}).get("value"), 30)
+        out.append({"title": title, "thumb": info["thumburl"], "u": info["descriptionurl"],
+                    "t": _caption_from(title, meta),
+                    "credit": " · ".join(x for x in (artist, licence) if x)})
+    return out
+
+
+def _commons_query(prefix):
+    q = urllib.parse.urlencode({
+        "action": "query", "format": "json", "formatversion": 2,
+        "generator": "categorymembers", "gcmtitle": COMMONS_CATEGORY,
+        "gcmnamespace": 6, "gcmtype": "file", "gcmlimit": 40,
+        "gcmstartsortkeyprefix": prefix,
+        "prop": "imageinfo", "iiprop": "url|size|mime|extmetadata",
+        "iiurlwidth": GALLERY_THUMB_W, "iiextmetadatalanguage": "en",
+        "iiextmetadatafilter": "ObjectName|ImageDescription|Artist|LicenseShortName",
+    })
+    return json.loads(_http_get(f"{COMMONS_API}?{q}", "application/json", ua=WIKIMEDIA_UA))
+
+
+_ALPHA = "ABCDEFGHIJKLMNOPRSTW"       # common initial letters, weighted towards real titles
+_recent = []                          # titles shown recently (most recent last)
+
+
+def commons_featured_set(n=GALLERY_SET_SIZE, rng=random):
+    """A random set of n featured pictures. Jumps to a random point in the
+    category's alphabetical order, takes the next 40 files, filters and
+    samples; retries from another point if too few qualify."""
+    picked = []
+    for _ in range(4):
+        prefix = rng.choice(_ALPHA) + rng.choice("abcdefghilmnoprstu")
+        cands = parse_commons_batch(_commons_query(prefix),
+                                    exclude=set(_recent) | {p["title"] for p in picked})
+        rng.shuffle(cands)
+        picked += cands[: n - len(picked)]
+        if len(picked) >= n:
+            break
+
+    def fetch(c):
+        try:
+            data = _download_jpeg(c["thumb"])
+            img = "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")
+            return {"t": c["t"], "u": c["u"], "credit": c["credit"], "img": img, "title": c["title"]}
+        except Exception as e:
+            log.warning("commons image failed %s: %r", c["thumb"], e)
+            return None
+
+    with cf.ThreadPoolExecutor(max_workers=n) as pool:
+        got = [r for r in pool.map(fetch, picked) if r]
+    _recent.extend(r.pop("title") for r in got)
+    del _recent[:-GALLERY_HISTORY]
+    return got
+
+
+def _fallback_set():
     def hit(entry):
         art, img, cap = entry
         try:
-            return {"t": cap, "u": art, "img": _gallery_image(img)}
+            return {"t": cap, "u": art, "credit": "Wikimedia Commons", "img": _gallery_image(img)}
         except Exception as e:
-            log.warning("gallery image failed %s: %r", img, e)
+            log.warning("fallback image failed %s: %r", img, e)
             return None
 
     with cf.ThreadPoolExecutor(max_workers=5) as pool:
-        ok = [r for r in pool.map(hit, GALLERY) if r]
-    if not ok:
-        raise RuntimeError("no gallery images available")
-    return {"pool": ok, "count": len(ok), "fetched_ts": time.time()}
+        return [r for r in pool.map(hit, GALLERY_FALLBACK) if r]
 
+
+def gallery_fetch_once():
+    """New random set of Commons featured pictures. If Commons is unreachable
+    and there is no previous set, show the cached fallback images instead
+    (the raise below keeps an existing live set on screen, marked stale)."""
+    try:
+        pool = commons_featured_set()
+        if len(pool) >= 3:
+            return {"pool": pool, "count": len(pool), "fetched_ts": time.time(), "source": "commons"}
+        err = RuntimeError(f"only {len(pool)} usable images from Commons")
+    except Exception as e:
+        err = e
+    log.warning("live gallery failed: %r", err)
+    if gallery_has_data():
+        raise err
+    pool = _fallback_set()
+    if not pool:
+        raise RuntimeError("no gallery images available")
+    return {"pool": pool, "count": len(pool), "fetched_ts": time.time(), "source": "fallback"}
+
+
+def gallery_has_data():
+    return _gallery_store is not None and _gallery_store.snapshot()["ok"]
+
+
+_gallery_store = None
 
 # ==========================================================================
 # Win32 helpers (Windows only)
@@ -691,7 +820,8 @@ def main():
 
     weather = PolledStore("weather", weather_fetch_once, WEATHER_REFRESH_S).start()
     news = PolledStore("news", news_fetch_once, NEWS_REFRESH_S).start()
-    gallery = PolledStore("gallery", gallery_fetch_once, GALLERY_REFRESH_S).start()
+    global _gallery_store
+    _gallery_store = gallery = PolledStore("gallery", gallery_fetch_once, GALLERY_REFRESH_S).start()
     api = API(weather, news, gallery)
 
     panel = panel_from_settings()

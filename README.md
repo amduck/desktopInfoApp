@@ -5,7 +5,7 @@ A local desktop dashboard built on **pywebview** (WebView2) for Windows.
 **Panels**
 - **Weather** — Lane Cove (−33.805, 151.19): current conditions, 3-hour pressure tendency, 24-hour strip starting at the current hour, 4-day outlook. Source: [Open-Meteo](https://open-meteo.com) (no API key), refreshed every 10 minutes.
 - **News** — 5 headlines at a time from a pool of up to 40 (BBC World, BBC Technology, TechCrunch RSS), rotating every 20 s, pool refreshed every 30 min. ‹ › to page; click a headline to open it in your browser.
-- **In focus** — 5 curated Wikimedia Commons images with captions, rotating every 30 s. Images are cached in `cache/gallery/` and re-checked weekly.
+- **In focus** — a new random set of 5 [Wikimedia Commons featured pictures](https://commons.wikimedia.org/wiki/Commons:Featured_pictures) every 20 minutes (from ~18,000 community-vetted images; no repeats within the last 300), rotating every 30 s with caption and photographer/licence credit. Click an image to open its Commons page. If Commons can't be reached at start-up, 5 saved images from `cache/gallery/` are shown instead.
 
 **Run**
 ```
@@ -27,4 +27,4 @@ venv\Scripts\python app.py        (or pythonw.exe for no console)
 - The JS bridge (`API`) only reads snapshots or signals a refresh — no bridge call waits on the network.
 - Logging goes to `app.log` (rotating, 3 × 512 KB); only failures, recoveries and user actions are written.
 
-Sources: [Open-Meteo](https://open-meteo.com) · BBC · TechCrunch · [Wikimedia Commons](https://commons.wikimedia.org)
+Sources: [Open-Meteo](https://open-meteo.com) · BBC · TechCrunch · [Wikimedia Commons](https://commons.wikimedia.org) (images under their individual free licences, credited in the panel)
