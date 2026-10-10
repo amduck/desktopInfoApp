@@ -1,7 +1,11 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.log
-*.json
-probe*.js
+*.log.*
+*.tmp
+settings.json
+cache/
 snapshots/
+probe_*.json

@@ -1,461 +1,718 @@
 #!/usr/bin/env python
 """
-Lane Cove Weather + News — a striking, bold Windows app.
+Lane Cove Weather + News — a desktop info panel built on pywebview (WebView2).
 
-Weather
-  * A background fetcher thread owns the Open-Meteo HTTP calls on a
-    30-second cadence, updating a thread-safe snapshot.
-  * The JS bridge (`pywebview.api.get_weather`) is pure read — it never
-    blocks on the network, so the pywebview COM worker pool can't
-    deadlock the UI.
-
-News
-  * An independent background refresher polls key-less RSS feeds
-    (BBC World, BBC Tech, TechCrunch) every 30 minutes, building a
-    deduped, recency-sorted pool of up to 40 headlines (World / Tech).
-  * `pywebview.api.get_news` is the same pure-read pattern.
-  * `pywebview.api.open_url(url)` opens a clicked headline in the
-    default browser (Windows).
+Data model
+  * Each data source (weather / news / gallery) is a PolledStore: one daemon
+    thread owns all network I/O for that source and publishes an immutable
+    snapshot under a lock. The first fetch happens on that thread, so the
+    window opens immediately even when the network is down.
+  * A failed fetch never replaces good data: the previous snapshot is kept,
+    `error` is set, and the loop retries with exponential back-off.
+  * The JS bridge (`API`) is pure reads plus "please refresh" signals —
+    nothing on the bridge thread touches the network.
 
 Run:  venv\\Scripts\\python.exe app.py
 """
 import base64
 import concurrent.futures as cf
+import ctypes
+import datetime as dt
+import hashlib
+import io
 import json
+import logging
+import logging.handlers
 import os
 import re
-import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import xml.sax.saxutils as sax
+from email.utils import parsedate_to_datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(_HERE, "index.html")
-DEBUG_LOG = os.path.join(_HERE, "push_debug.log")
+LOG_PATH = os.path.join(_HERE, "app.log")
+CACHE_DIR = os.path.join(_HERE, "cache", "gallery")
+SETTINGS_PATH = os.path.join(_HERE, "settings.json")
+
+WINDOW_TITLE = "Lane Cove Weather + News"
 
 LAT, LON = -33.805, 151.19
-WEATHER_REFRESH_S = 30
-NEWS_REFRESH_S    = 1800          # 30 minutes
-NEWS_POOL_CAP     = 40            # UI rotates this many
-NEWS_AGE_CAP_HRS  = 48            # discard older than this
+TIMEZONE = "Australia/Sydney"
 
-WEATHER_URL = (
-    "https://api.open-meteo.com/v1/forecast?"
-    "latitude=-33.805&longitude=151.19"
-    "&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,"
-    "weather_code,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,is_day"
-    "&hourly=temperature_2m,precipitation_probability,weather_code"
-    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-    "&timezone=Australia%2FSydney&forecast_days=4"
-)
+# Open-Meteo "current" values are built from 15-minutely model data, so
+# polling faster than every few minutes only re-downloads the same numbers.
+WEATHER_REFRESH_S = 600           # 10 minutes
+NEWS_REFRESH_S = 1800             # 30 minutes
+GALLERY_REFRESH_S = 86400         # images are static; re-check daily
+GALLERY_CACHE_MAX_AGE_S = 7 * 86400
+RETRY_MIN_S = 30                  # first retry after a failure
+NEWS_POOL_CAP = 40
+NEWS_AGE_CAP_HRS = 48
+HOURLY_WINDOW = 24
+PRESSURE_TENDENCY_HRS = 3         # standard synoptic tendency period
+
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode({
+    "latitude": LAT, "longitude": LON,
+    "current": ",".join([
+        "temperature_2m", "apparent_temperature", "relative_humidity_2m",
+        "precipitation", "weather_code", "wind_speed_10m", "wind_gusts_10m",
+        "wind_direction_10m", "pressure_msl", "is_day"]),
+    "hourly": "temperature_2m,precipitation_probability,weather_code,pressure_msl",
+    "daily": ("weather_code,temperature_2m_max,temperature_2m_min,"
+              "precipitation_probability_max"),
+    "timezone": TIMEZONE,
+    "past_days": 1,               # gives 3 h of pressure history just after midnight
+    "forecast_days": 4,
+})
 
 NEWS_FEEDS = [
     ("World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
-    ("Tech",  "https://feeds.bbci.co.uk/news/technology/rss.xml"),
-    ("Tech",  "https://techcrunch.com/feed/"),
+    ("Tech", "https://feeds.bbci.co.uk/news/technology/rss.xml"),
+    ("Tech", "https://techcrunch.com/feed/"),
 ]
 
-# gallery: captioned images -> Wikipedia article pages (originals from en.wikipedia.org)
+# (article_url, image_url, caption)
 GALLERY = [
-    # (article_url, image_url, caption) — Special:FilePath?width=800, all verified 200 OK
     ("https://en.wikipedia.org/wiki/Sydney",
      "https://commons.wikimedia.org/wiki/Special:FilePath/Sydney_Opera_House_and_Harbour_Bridge_Dusk_%282%29_2019-06-21.jpg?width=800",
-     "Sydney, at dusk — the sails of the Opera House set off the Harbour Bridge, a harbour kept for ships and sails alike."),
+     "Sydney at dusk — the Opera House sails with the Harbour Bridge behind."),
     ("https://en.wikipedia.org/wiki/Bondi_Beach",
      "https://commons.wikimedia.org/wiki/Special:FilePath/Bondi_from_above.jpg?width=800",
-     "Bondi from above — a crescent of sand and sea on Sydney's east coast, the beach at its widest."),
+     "Bondi from above — a crescent of sand and surf on Sydney's eastern shore."),
     ("https://en.wikipedia.org/wiki/Great_Barrier_Reef",
      "https://commons.wikimedia.org/wiki/Special:FilePath/ISS-45_StoryOfWater%2C_Great_Barrier_Reef%2C_Australia.jpg?width=800",
-     "The Great Barrier Reef — the largest living structure on Earth, 2,300 km of coral seen from the ISS."),
+     "The Great Barrier Reef from the ISS — about 2,300 km of reef off the Queensland coast."),
     ("https://en.wikipedia.org/wiki/Kakadu_National_Park",
      "https://commons.wikimedia.org/wiki/Special:FilePath/Kakadu_2431.jpg?width=800",
-     "Kakadu — water country for 65,000 years, its rock art older than the pyramids on Anangu country."),
+     "Kakadu — Bininj/Mungguy country, jointly managed with its traditional owners and rich in ancient rock art."),
     ("https://en.wikipedia.org/wiki/Hubble_Space_Telescope",
      "https://commons.wikimedia.org/wiki/Special:FilePath/Hubble_2009_close-up_2.jpg?width=800",
-     "Hubble, 30 years up — a deep-field snapshot; that whole field is a 1/40,000th of a full-moon sky."),
+     "Hubble, in orbit since 1990 — photographed during its final servicing mission in 2009."),
 ]
-GALLERY_ROTATE_S = 30
-GALLERY_REFRESH_S = 1800
-GALLERY_VISIBLE  = 5
 
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 
 # ---------------------------------------------------------------- logging
-def dbg(msg):
+log = logging.getLogger("lanecove")
+
+
+def setup_logging():
+    """Size-capped log (3 x 512 KB). Routine successes are DEBUG and not
+    written; failures, recoveries and user actions are."""
+    if log.handlers:
+        return
+    log.setLevel(logging.INFO)
     try:
-        with open(DEBUG_LOG, "a", encoding="utf-8") as f:
-            f.write(f"[{time.strftime('%H:%M:%S')}] {msg}\n")
-            f.flush()
-    except Exception:
-        pass
+        h = logging.handlers.RotatingFileHandler(
+            LOG_PATH, maxBytes=512 * 1024, backupCount=3, encoding="utf-8")
+        h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s",
+                                         "%Y-%m-%d %H:%M:%S"))
+        log.addHandler(h)
+    except OSError:
+        log.addHandler(logging.NullHandler())
+
+
+# ------------------------------------------------------------------- store
+class PolledStore:
+    """One background thread per data source.
+
+    * fetch() returns a dict or raises. A raise keeps the previous data.
+    * Retries use exponential back-off from RETRY_MIN_S up to `interval`.
+    * refresh() wakes the loop early without blocking the caller.
+    """
+
+    def __init__(self, name, fetch, interval):
+        self.name, self._fetch, self.interval = name, fetch, interval
+        self._lock = threading.Lock()
+        self._wake = threading.Event()
+        self._data = None
+        self._error = None
+        self._ts = None
+        self._failures = 0
+
+    def start(self):
+        threading.Thread(target=self._loop, daemon=True, name=f"lc-{self.name}").start()
+        return self
+
+    def refresh(self):
+        self._wake.set()
+
+    def run_once(self):
+        t0 = time.time()
+        try:
+            data = self._fetch()
+        except Exception as e:
+            with self._lock:
+                self._error = f"{type(e).__name__}: {e}"
+                self._failures += 1
+            log.warning("%s fetch failed (%d in a row): %r", self.name, self._failures, e)
+            return False
+        with self._lock:
+            recovered = self._failures > 0
+            self._data, self._ts, self._error, self._failures = data, time.time(), None, 0
+        if recovered:
+            log.info("%s recovered", self.name)
+        log.debug("%s ok in %.2fs", self.name, time.time() - t0)
+        return True
+
+    def _next_wait(self):
+        if not self._failures:
+            return self.interval
+        return min(self.interval, RETRY_MIN_S * 2 ** (self._failures - 1))
+
+    def _loop(self):
+        while True:
+            self.run_once()
+            self._wake.wait(self._next_wait())
+            self._wake.clear()
+
+    def snapshot(self):
+        with self._lock:
+            return {"ok": self._data is not None, "error": self._error,
+                    "data": self._data, "success_ts": self._ts,
+                    "refresh_seconds": self.interval}
 
 
 # ----------------------------------------------------------------- weather
-def weather_fetch_once():
-    req = urllib.request.Request(
-        WEATHER_URL, headers={"User-Agent": "lane-cove-weather/1.0",
-                              "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        raw = json.loads(r.read())
+def _http_get(url, accept, to=15, limit=None):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": accept})
+    with urllib.request.urlopen(req, timeout=to) as r:
+        return r.read(limit) if limit else r.read()
+
+
+def _pressure_tendency(delta):
+    """Words for a 3-hour MSL pressure change (hPa), following the usual
+    marine-forecast bands."""
+    a = abs(delta)
+    if a < 0.5:
+        return "steady"
+    word = "rising" if delta > 0 else "falling"
+    if a < 1.6:
+        return f"{word} slowly"
+    if a < 3.6:
+        return word
+    if a < 6.0:
+        return f"{word} quickly"
+    return f"{word} very rapidly"
+
+
+def parse_weather(raw):
+    """Turn an Open-Meteo response into exactly what the UI renders:
+    the hourly window starts at the current local hour, the daily list
+    starts today, and pressure tendency is a real 3-hour change."""
     c, h, d = raw["current"], raw.get("hourly", {}), raw.get("daily", {})
+    now_iso = c["time"]                       # 'YYYY-MM-DDTHH:MM', local time
+    today = now_iso[:10]
+
+    h_time = h.get("time", [])
+    # Index of the hour containing "now" (full ISO strings sort correctly).
+    i_now = 0
+    for i, t in enumerate(h_time):
+        if t <= now_iso:
+            i_now = i
+        else:
+            break
+    sl = slice(i_now, i_now + HOURLY_WINDOW)
+
+    tendency, delta = None, None
+    p = h.get("pressure_msl", [])
+    j = i_now - PRESSURE_TENDENCY_HRS
+    if j >= 0 and i_now < len(p) and p[i_now] is not None and p[j] is not None:
+        delta = round(p[i_now] - p[j], 1)
+        tendency = _pressure_tendency(delta)
+
+    d_time = d.get("time", [])
+    k0 = next((k for k, t in enumerate(d_time) if t >= today), len(d_time))
+
+    def dl(key):
+        return d.get(key, [])[k0:]
+
     return {
         "temp": c["temperature_2m"], "feels": c["apparent_temperature"],
         "humidity": c["relative_humidity_2m"], "precip": c["precipitation"],
         "wind": c["wind_speed_10m"], "gust": c["wind_gusts_10m"],
         "wind_dir": c["wind_direction_10m"], "pressure": c["pressure_msl"],
+        "pressure_delta_3h": delta, "pressure_tendency": tendency,
         "code": c["weather_code"], "is_day": c.get("is_day", 1),
-        "as_of": c["time"], "elev": raw.get("elevation"),
+        "as_of": now_iso, "elev": raw.get("elevation"),
         "lat": raw.get("latitude"), "lon": raw.get("longitude"),
-        "h_time": [t[:13] for t in h.get("time", [])],
-        "h_temp": h.get("temperature_2m", []),
-        "h_rain": h.get("precipitation_probability", []),
-        "h_code": h.get("weather_code", []),
-        "d_time": d.get("time", []), "d_max": d.get("temperature_2m_max", []),
-        "d_min": d.get("temperature_2m_min", []), "d_code": d.get("weather_code", []),
-        "d_rain": d.get("precipitation_probability_max", []),
+        "h_hour": [t[11:13] for t in h_time[sl]],
+        "h_temp": h.get("temperature_2m", [])[sl],
+        "h_rain": h.get("precipitation_probability", [])[sl],
+        "h_code": h.get("weather_code", [])[sl],
+        "d_time": d_time[k0:],
+        "d_name": ["TODAY" if t == today else dt.date.fromisoformat(t).strftime("%a").upper()
+                   for t in d_time[k0:]],
+        "d_max": dl("temperature_2m_max"), "d_min": dl("temperature_2m_min"),
+        "d_code": dl("weather_code"), "d_rain": dl("precipitation_probability_max"),
     }
 
 
+def weather_fetch_once():
+    return parse_weather(json.loads(_http_get(WEATHER_URL, "application/json")))
+
+
 # -------------------------------------------------------------------- news
-def _http_get(url, to=10):
-    req = urllib.request.Request(
-        url, headers={"User-Agent": USER_AGENT,
-                      "Accept": "application/rss+xml, application/xml"})
-    with urllib.request.urlopen(req, timeout=to) as r:
-        return r.read()
+def _clean_url(u):
+    s = sax.unescape(u or "").strip()
+    s = re.sub(r"&+amp;$", "", s)     # trailing &amp; left in some feed links
+    return re.sub(r"&+$", "", s)
 
 
-def _clean(u):
-    if not u:
-        return u
-    s = sax.unescape(u).strip()    # &amp; -> &
-    s = re.sub(r"&+amp;$", "", s)  # drop trailing &amp; from query strings
-    s = re.sub(r"&+$", "", s)      # drop any dangling literal &
-    return s
+def _parse_date(s):
+    """RFC 822 (pubDate) or ISO 8601 (dc:date) -> epoch seconds, else None."""
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return parsedate_to_datetime(s).timestamp()
+    except (TypeError, ValueError, IndexError):
+        pass
+    try:
+        d = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt.timezone.utc)
+        return d.timestamp()
+    except ValueError:
+        return None
+
+
+DC = "{http://purl.org/dc/elements/1.1/}"
 
 
 def _item_dict(it, cat):
-    t = (it.findtext("title") or "").strip()
-    # link: either <link> or dc:identifier
-    u = (it.findtext("link") or
-         it.findtext("{http://purl.org/dc/elements/1.1/}identifier") or "").strip()
-    ts = None
-    pd = (it.findtext("pubDate") or
-          it.findtext("{http://purl.org/dc/elements/1.1/}date") or "").strip()
-    if pd:
-        try:
-            from email.utils import parsedate_to_datetime
-            ts = parsedate_to_datetime(pd).timestamp()
-        except Exception:
-            ts = None
-    t = sax.unescape(t)
-    return {"t": t, "u": u, "c": cat, "ts": ts}
+    title = sax.unescape((it.findtext("title") or "").strip())
+    link = _clean_url(it.findtext("link") or it.findtext(DC + "identifier"))
+    ts = _parse_date(it.findtext("pubDate") or it.findtext(DC + "date"))
+    return {"t": title, "u": link, "c": cat, "ts": ts}
 
 
-def news_fetch_once():
-    """Fetch all feeds in parallel; dedupe by URL; sort newest-first; cap 40."""
-    all_items = []
-    ok_counts = []
+def parse_feed(raw, cat):
+    root = ET.fromstring(raw)
+    out = []
+    for it in root.findall(".//item"):
+        d = _item_dict(it, cat)
+        if d["t"] and d["u"].startswith(("http://", "https://")):
+            out.append(d)
+    return out
 
-    def hit(kv):
-        cat, url = kv
-        try:
-            raw  = _http_get(url)
-            root = ET.fromstring(raw)
-            out  = []
-            for it in root.findall(".//item"):
-                d = _item_dict(it, cat)
-                if d["t"] and d["u"]:
-                    out.append(d)
-            return ("ok", len(out), out)
-        except Exception as e:
-            return ("err", 0, [])
 
-    with cf.ThreadPoolExecutor(max_workers=len(NEWS_FEEDS)) as pool:
-        for status, n, items in pool.map(hit, NEWS_FEEDS):
-            if status == "ok":
-                all_items.extend(items)
-                ok_counts.append(n)
-            else:
-                ok_counts.append(0)
-
-    now  = time.time()
-    cut  = now - NEWS_AGE_CAP_HRS * 3600
+def merge_news(items, now=None):
+    """Dedupe by URL, drop items older than the age cap, newest first.
+    Undated items are kept but sorted after every dated one."""
+    now = now or time.time()
+    cut = now - NEWS_AGE_CAP_HRS * 3600
     seen, out = set(), []
-    for d in all_items:
-        if (d["ts"] or now) < cut:
+    for d in items:
+        if d["ts"] is not None and d["ts"] < cut:
             continue
         if d["u"] in seen:
             continue
         seen.add(d["u"])
-        out.append({"t": d["t"], "u": d["u"], "c": d["c"], "ts": d["ts"]})
-
-    out.sort(key=lambda x: x.get("ts") or now, reverse=True)
-    pool_top = out[:NEWS_POOL_CAP]
-    top = [{"t": x["t"], "u": x["u"], "c": x["c"]} for x in pool_top]
-    dbg(f"news fetched: feeds_ok={sum(1 for x in ok_counts if x)}/{len(NEWS_FEEDS)} "
-        f"pool={len(top)} top0={top[0]['t'][:60] if top else '-'}")
-    return {"pool": top, "count": len(top), "fetched_ts": now,
-            "feed_count": len(NEWS_FEEDS)}
+        out.append(d)
+    out.sort(key=lambda x: x["ts"] if x["ts"] is not None else float("-inf"), reverse=True)
+    return [{"t": x["t"], "u": x["u"], "c": x["c"]} for x in out[:NEWS_POOL_CAP]]
 
 
+def news_fetch_once():
+    def hit(kv):
+        cat, url = kv
+        try:
+            return parse_feed(_http_get(url, "application/rss+xml, application/xml", to=10), cat), None
+        except Exception as e:
+            return None, f"{url}: {e!r}"
 
-# ------------------------------------------------------------------ gallery
-def _img_b64(url, to=25):
-    """Download the original, re-encode as \u2264800px JPEG q82, return a base64 data-URI."""
-    import io
+    with cf.ThreadPoolExecutor(max_workers=len(NEWS_FEEDS)) as pool:
+        results = list(pool.map(hit, NEWS_FEEDS))
+    errors = [e for _, e in results if e]
+    for e in errors:
+        log.warning("news feed failed: %s", e)
+    if len(errors) == len(NEWS_FEEDS):
+        raise RuntimeError("all news feeds failed")
+    pool_top = merge_news([d for items, _ in results if items for d in items])
+    if not pool_top:
+        raise RuntimeError("feeds returned no usable stories")
+    return {"pool": pool_top, "count": len(pool_top), "fetched_ts": time.time(),
+            "feeds_ok": len(NEWS_FEEDS) - len(errors), "feed_count": len(NEWS_FEEDS)}
+
+
+# ----------------------------------------------------------------- gallery
+def _cache_path(url):
+    return os.path.join(CACHE_DIR, hashlib.sha1(url.encode()).hexdigest() + ".jpg")
+
+
+def _download_jpeg(url, to=25):
+    """Download, re-encode as <=800 px JPEG q82, return bytes."""
     from PIL import Image, ImageOps
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=to) as r:
-        raw = r.read(6 * 1024 * 1024)          # 6 MB cap
-    im  = ImageOps.exif_transpose(Image.open(io.BytesIO(raw)))
-    im  = im.convert("RGB")
-    im.thumbnail((800, 800), Image.LANCZOS)    # \u2264800 px per side
+    raw = _http_get(url, "image/*", to=to, limit=6 * 1024 * 1024)
+    im = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+    im.thumbnail((800, 800), Image.LANCZOS)
     buf = io.BytesIO()
     im.save(buf, format="JPEG", quality=82, optimize=True)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    return buf.getvalue()
+
+
+def _gallery_image(url):
+    """Disk cache first; download only when missing or older than a week.
+    A failed download falls back to a stale cached copy."""
+    path = _cache_path(url)
+    fresh = os.path.exists(path) and time.time() - os.path.getmtime(path) < GALLERY_CACHE_MAX_AGE_S
+    if not fresh:
+        try:
+            data = _download_jpeg(url)
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.replace(tmp, path)
+        except Exception as e:
+            if not os.path.exists(path):
+                raise
+            log.warning("gallery download failed, using cached copy %s: %r", url, e)
+    with open(path, "rb") as f:
+        return "data:image/jpeg;base64," + base64.b64encode(f.read()).decode("ascii")
 
 
 def gallery_fetch_once():
-    """Download each image in parallel, verify byte signature, base64-embed,
-    keep only entries whose download succeeded (so the pool is all-live)."""
-
     def hit(entry):
         art, img, cap = entry
         try:
-            b64 = _img_b64(img)
-            return {"t": cap, "u": art, "img": b64, "ok": True}
+            return {"t": cap, "u": art, "img": _gallery_image(img)}
         except Exception as e:
-            dbg(f"gallery fetch FAIL {img}: {e!r}")
-            return {"t": cap, "u": art, "img": None, "ok": False}
+            log.warning("gallery image failed %s: %r", img, e)
+            return None
 
     with cf.ThreadPoolExecutor(max_workers=5) as pool:
-        res = list(pool.map(hit, GALLERY))
-    ok = [r for r in res if r.pop("ok")]
-    dbg(f"gallery fetched: {len(ok)}/{len(GALLERY)}")
+        ok = [r for r in pool.map(hit, GALLERY) if r]
+    if not ok:
+        raise RuntimeError("no gallery images available")
     return {"pool": ok, "count": len(ok), "fetched_ts": time.time()}
 
-# ------------------------------------------------------------------ stores
-class Store:
-    """Weather snapshot + background fetcher loop, exposed via the JS bridge."""
 
-    def __init__(self):
-        self._lock  = threading.Lock()
-        self._data  = None
-        self._error = None
-        self._ts    = None
+# ==========================================================================
+# Win32 helpers (Windows only)
+# ==========================================================================
+class _RECT32(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_uint), ("rcMonitor", _RECT32),
+                ("rcWork", _RECT32), ("dwFlags", ctypes.c_uint)]
+
+
+def _primary_work_area():
+    if os.name != "nt":
+        return (0, 0, 1920, 1080)
+    r = _RECT32()
+    ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0)  # SPI_GETWORKAREA
+    return (r.left, r.top, r.right - r.left, r.bottom - r.top)
+
+
+def _monitors():
+    """Work areas of every attached monitor as [(x, y, w, h)]."""
+    if os.name != "nt":
+        return []
+    out = []
+    u = ctypes.windll.user32
+    u.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    u.GetMonitorInfoW.restype = ctypes.c_int
+    u.EnumDisplayMonitors.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                      ctypes.c_void_p, ctypes.c_void_p]
+    CB = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                            ctypes.c_void_p, ctypes.c_void_p)
+
+    def cb(hmon, _hdc, _rect, _lp):
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        if u.GetMonitorInfoW(hmon, ctypes.byref(mi)):
+            w = mi.rcWork
+            out.append((w.left, w.top, w.right - w.left, w.bottom - w.top))
+        return 1
+
+    try:
+        proc = CB(cb)               # keep the C callback alive during the call
+        u.EnumDisplayMonitors(None, None, proc, 0)
+    except Exception as e:
+        log.warning("EnumDisplayMonitors failed: %r", e)
+    return out
+
+
+def work_area_for(x, y, w, h, monitors=None):
+    """Work area of the monitor that holds most of the rect; if the rect is
+    entirely off-screen, the monitor nearest its centre (primary if none)."""
+    mons = monitors if monitors is not None else _monitors()
+    if not mons:
+        return _primary_work_area()
+    cx, cy = x + w / 2, y + h / 2
+
+    def score(m):
+        mx, my, mw, mh = m
+        ix = max(0, min(x + w, mx + mw) - max(x, mx))
+        iy = max(0, min(y + h, my + mh) - max(y, my))
+        dx = max(mx - cx, 0, cx - (mx + mw))
+        dy = max(my - cy, 0, cy - (my + mh))
+        return (ix * iy, -(dx * dx + dy * dy))
+
+    return tuple(max(mons, key=score))
+
+
+def _set_window_pos(hwnd, x, y, w, h):
+    u = ctypes.windll.user32
+    u.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int,
+                               ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
+    return u.SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE)
+
+
+def _hwnd_of(window):
+    """Native handle of the pywebview window: the WinForms form handle when
+    available, otherwise a lookup by window title."""
+    try:
+        return int(window.native.Handle.ToInt64())
+    except Exception:
+        pass
+    if os.name != "nt":
+        return 0
+    u = ctypes.windll.user32
+    u.FindWindowW.restype = ctypes.c_void_p
+    u.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+    return u.FindWindowW(None, WINDOW_TITLE) or 0
+
+
+# ------------------------------------------------------------------ settings
+PANEL_MIN_W, PANEL_MIN_H = 360, 280
+PANEL_MAX_W, PANEL_MAX_H = 3840, 2400
+
+
+def load_settings():
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_settings(d):
+    tmp = SETTINGS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(d, f, indent=2)
+    os.replace(tmp, SETTINGS_PATH)
+
+
+def default_panel(work):
+    wx, wy, ww, wh = work
+    w, h = min(1024, ww), min(760, wh)
+    return {"x": wx + (ww - w) // 2, "y": wy + int(wh * 0.14), "w": w, "h": h}
+
+
+def clamp_panel(x, y, w, h, monitors=None):
+    """Clamp size, then keep at least a grabbable strip on the monitor the
+    rect is (mostly) on — not just the primary monitor."""
+    w = int(max(PANEL_MIN_W, min(PANEL_MAX_W, w)))
+    h = int(max(PANEL_MIN_H, min(PANEL_MAX_H, h)))
+    wx, wy, ww, wh = work_area_for(int(x), int(y), w, h, monitors)
+    x = int(max(wx - w + 120, min(wx + ww - 120, x)))
+    y = int(max(wy, min(wy + wh - 60, y)))           # title bar never above the top
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def panel_from_settings(monitors=None):
+    st = load_settings().get("panel")
+    if isinstance(st, dict):
         try:
-            self._data  = weather_fetch_once()
-            self._ts    = time.time()
-            self._error = None
-            dbg(f"weather primed: temp={self._data['temp']} code={self._data['code']}")
-        except Exception as e:
-            self._error = str(e)
-            dbg(f"weather prime FAIL: {e!r}")
-        threading.Thread(target=self._loop, daemon=True, name="lc-fetch").start()
-        dbg(f"weather fetcher started (pid={os.getpid()})")
+            return clamp_panel(st["x"], st["y"], st["w"], st["h"], monitors)
+        except (KeyError, TypeError, ValueError):
+            pass
+    return default_panel(_primary_work_area())
 
-    def _loop(self):
-        while True:
-            time.sleep(WEATHER_REFRESH_S)
-            t0 = time.time()
-            try:
-                data = weather_fetch_once()
-                with self._lock:
-                    self._data, self._ts, self._error = data, time.time(), None
-                dbg(f"weather ok in {time.time()-t0:.2f}s code={data['code']}")
-            except Exception as e:
-                with self._lock:
-                    self._error = str(e)
-                dbg(f"weather FAIL: {e!r}")
-
-    def snapshot(self):
-        with self._lock:
-            return {"ok": self._ts is not None, "error": self._error,
-                    "data": self._data, "success_ts": self._ts,
-                    "refresh_seconds": WEATHER_REFRESH_S}
-
-
-class NewsStore:
-    """Key-less RSS pool; independent 30-min refresher; pure-read bridge."""
-
-    def __init__(self):
-        self._lock  = threading.Lock()
-        self._data  = None
-        self._error = None
-        self._ts    = None
-        try:
-            self._data  = news_fetch_once()
-            self._ts    = time.time()
-            self._error = None
-            dbg(f"news primed: count={self._data['count']}")
-        except Exception as e:
-            self._error = str(e)
-            dbg(f"news prime FAIL: {e!r}")
-        threading.Thread(target=self._loop, daemon=True, name="lc-news").start()
-        dbg(f"news fetcher started (pid={os.getpid()})")
-
-    def _loop(self):
-        while True:
-            time.sleep(NEWS_REFRESH_S)
-            t0 = time.time()
-            try:
-                data = news_fetch_once()
-                with self._lock:
-                    self._data, self._ts, self._error = data, time.time(), None
-                dbg(f"news ok in {time.time()-t0:.2f}s count={data['count']}")
-            except Exception as e:
-                with self._lock:
-                    self._error = str(e)
-                dbg(f"news FAIL: {e!r}")
-
-    def snapshot(self):
-        with self._lock:
-            return {"ok": self._ts is not None, "error": self._error,
-                    "data": self._data, "success_ts": self._ts,
-                    "refresh_seconds": NEWS_REFRESH_S}
-
-
-
-class GalleryStore:
-    """Curated images with captions; 30-min refresher re-downloads each image
-    so the pool is byte-live at every refresh."""
-
-    def __init__(self):
-        self._lock  = threading.Lock()
-        self._data  = None
-        self._error = None
-        self._ts    = None
-        try:
-            self._data = gallery_fetch_once()
-            self._ts   = time.time()
-        except Exception as e:
-            self._error = str(e)
-            dbg(f"gallery prime FAIL: {e!r}")
-        threading.Thread(target=self._loop, daemon=True, name="lc-gallery").start()
-        dbg(f"gallery fetcher started (pid={os.getpid()})")
-
-    def _loop(self):
-        while True:
-            time.sleep(GALLERY_REFRESH_S)
-            t0 = time.time()
-            try:
-                self._data = gallery_fetch_once()
-                self._ts   = time.time()
-                with self._lock:
-                    self._data, self._ts = self._data, time.time()
-                    self._error = None
-                dbg(f"gallery ok in {time.time()-t0:.2f}s count={self._data['count']}")
-            except Exception as e:
-                with self._lock:
-                    self._error = str(e)
-                dbg(f"gallery FAIL: {e!r}")
-
-    def snapshot(self):
-        with self._lock:
-            return {"ok": self._ts is not None, "error": self._error,
-                    "data": self._data, "success_ts": self._ts,
-                    "refresh_seconds": GALLERY_REFRESH_S}
 
 # --------------------------------------------------------------------- API
 class API:
-    def __init__(self, weather, news, gallery):
-        self._weather  = weather
-        self._news     = news
-        self._gallery  = gallery
-        self._win      = None
+    """JS bridge. Reads return snapshots; refresh_* only signal the
+    background threads, so no bridge call ever waits on the network."""
 
-    # ---- weather ---------------------------------------------------------
+    def __init__(self, weather, news, gallery):
+        self._weather, self._news, self._gallery = weather, news, gallery
+        self._win = None
+        self._save_timer = None
+
+    # ---- data ------------------------------------------------------------
     def get_weather(self):
         return self._weather.snapshot()
 
-    def refresh_now(self):
-        try:
-            data = weather_fetch_once()
-            with self._weather._lock:
-                self._weather._data  = data
-                self._weather._ts    = time.time()
-                self._weather._error = None
-        except Exception as e:
-            with self._weather._lock:
-                self._weather._error = str(e)
-        return self._weather.snapshot()
-
-    # ---- news ------------------------------------------------------------
     def get_news(self):
         return self._news.snapshot()
 
-    def refresh_news(self):
-        try:
-            data = news_fetch_once()
-            with self._news._lock:
-                self._news._data  = data
-                self._news._ts    = time.time()
-                self._news._error = None
-        except Exception as e:
-            with self._news._lock:
-                self._news._error = str(e)
-        return self._news.snapshot()
-
-    # ---- gallery ---------------------------------------------------------
     def get_gallery(self):
         return self._gallery.snapshot()
 
-    def refresh_gallery(self):
-        try:
-            self._gallery._data  = gallery_fetch_once()
-            self._gallery._ts    = time.time()
-            with self._gallery._lock:
-                self._gallery._error = None
-        except Exception as e:
-            with self._gallery._lock:
-                self._gallery._error = str(e)
-        return self._gallery.snapshot()
+    def refresh_now(self):
+        self._weather.refresh()
+        return {"ok": True}
 
-    # ---- browser --------------------------------------------------------
+    def refresh_news(self):
+        self._news.refresh()
+        return {"ok": True}
+
+    def refresh_gallery(self):
+        self._gallery.refresh()
+        return {"ok": True}
+
+    # ---- browser ---------------------------------------------------------
     def open_url(self, url):
         try:
-            if not isinstance(url, str) or not url.startswith("http"):
+            p = urllib.parse.urlparse(url if isinstance(url, str) else "")
+            if p.scheme not in ("http", "https") or not p.netloc:
                 return {"ok": False, "error": "bad-url"}
             os.startfile(url)
             return {"ok": True}
         except Exception as e:
-            dbg(f"open_url FAIL {url!r}: {e!r}")
+            log.warning("open_url failed %r: %r", url, e)
             return {"ok": False, "error": str(e)}
 
-    # ---- window ---------------------------------------------------------
+    # ---- window ----------------------------------------------------------
     def minimise(self):
-        try: self._win.minimise()
-        except Exception: pass
+        try:
+            self._win.minimize()
+        except Exception as e:
+            log.warning("minimise failed: %r", e)
 
     def close(self):
-        try: self._win.destroy()
-        except Exception: pass
+        self.quit_app()
+
+    def quit_app(self):
+        log.info("quit requested")
+        try:
+            self._win.destroy()
+        except Exception as e:
+            log.warning("destroy failed: %r", e)
+        return {"ok": True}
+
+    # ---- panel settings ---------------------------------------------------
+    def get_panel(self):
+        mons = _monitors()
+        panel = panel_from_settings(mons)
+        return {"ok": True, "panel": panel,
+                "work": list(work_area_for(panel["x"], panel["y"], panel["w"], panel["h"], mons)),
+                "monitors": [list(m) for m in mons] or [list(_primary_work_area())],
+                "min": {"w": PANEL_MIN_W, "h": PANEL_MIN_H}}
+
+    def _persist_panel(self, panel):
+        st = load_settings()
+        st["panel"] = panel
+        st.pop("mode", None)                 # wall mode no longer exists
+        save_settings(st)
+
+    def save_panel(self, x, y, w, h):
+        try:
+            panel = clamp_panel(int(x), int(y), int(w), int(h))
+        except (TypeError, ValueError) as e:
+            return {"ok": False, "error": f"bad-value: {e!r}"}
+        try:
+            self._persist_panel(panel)
+        except OSError as e:
+            log.warning("save_panel persist failed: %r", e)
+            return {"ok": False, "error": str(e)}
+        if self._win is not None:
+            try:
+                hwnd = _hwnd_of(self._win)
+                if hwnd and os.name == "nt":
+                    _set_window_pos(hwnd, panel["x"], panel["y"], panel["w"], panel["h"])
+                else:
+                    self._win.move(panel["x"], panel["y"])
+                    self._win.resize(panel["w"], panel["h"])
+            except Exception as e:
+                log.warning("save_panel live move failed: %r", e)
+        log.info("panel saved %s", panel)
+        return {"ok": True, "panel": panel}
+
+    # ---- native move / resize -> settings (debounced) ---------------------
+    def _on_geometry_changed(self, *_):
+        if self._save_timer:
+            self._save_timer.cancel()
+        self._save_timer = threading.Timer(0.6, self._save_native_geometry)
+        self._save_timer.daemon = True
+        self._save_timer.start()
+
+    def _save_native_geometry(self):
+        try:
+            hwnd = _hwnd_of(self._win)
+            if not hwnd or os.name != "nt":
+                return
+            r = _RECT32()
+            u = ctypes.windll.user32
+            u.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            if not u.GetWindowRect(hwnd, ctypes.byref(r)):
+                return
+            if u.IsIconic(ctypes.c_void_p(hwnd)) or u.IsZoomed(ctypes.c_void_p(hwnd)):
+                return                       # don't persist minimised/maximised rects
+            panel = clamp_panel(r.left, r.top, r.right - r.left, r.bottom - r.top)
+            if load_settings().get("panel") != panel:
+                self._persist_panel(panel)
+                log.info("window geometry saved %s", panel)
+        except Exception as e:
+            log.warning("saving window geometry failed: %r", e)
+
+    def _apply_saved_geometry(self, *_):
+        """pywebview's create_window() takes logical (DPI-scaled) pixels while
+        settings are stored in physical pixels (GetWindowRect/SetWindowPos), so
+        once the window exists, place it exactly from the saved rect."""
+        if os.name != "nt":
+            return
+        try:
+            hwnd = _hwnd_of(self._win)
+            if hwnd:
+                p = panel_from_settings()
+                _set_window_pos(hwnd, p["x"], p["y"], p["w"], p["h"])
+        except Exception as e:
+            log.warning("applying saved geometry failed: %r", e)
+
+    def _set_animation_paused(self, paused):
+        try:
+            self._win.evaluate_js(f"window.__lc_pause && window.__lc_pause({'true' if paused else 'false'})")
+        except Exception:
+            pass
 
 
-# -------------------------------------------------------------------- main
 def main():
     import webview
-    weather = Store()
-    news    = NewsStore()
-    gallery = GalleryStore()
-    api     = API(weather, news, gallery)
-    window  = webview.create_window(
-        "Lane Cove Weather + News",
-        url=HTML_PATH,
-        width=1200, height=1080,
-        min_size=(980, 760),
-        resizable=True,
-        easy_drag=True,
-        text_select=False,
-        background_color="#06070c",
-        js_api=api,
-    )
+    setup_logging()
+    log.info("starting (pid=%d)", os.getpid())
+
+    weather = PolledStore("weather", weather_fetch_once, WEATHER_REFRESH_S).start()
+    news = PolledStore("news", news_fetch_once, NEWS_REFRESH_S).start()
+    gallery = PolledStore("gallery", gallery_fetch_once, GALLERY_REFRESH_S).start()
+    api = API(weather, news, gallery)
+
+    panel = panel_from_settings()
+    window = webview.create_window(
+        WINDOW_TITLE, url=HTML_PATH, js_api=api,
+        x=panel["x"], y=panel["y"], width=panel["w"], height=panel["h"],
+        min_size=(PANEL_MIN_W, PANEL_MIN_H), resizable=True,
+        text_select=False, background_color="#06070c")
     api._win = window
+
+    # Persist native moves/resizes; pause the background animation while minimised.
+    for ev, handler in (("shown", api._apply_saved_geometry),
+                        ("moved", api._on_geometry_changed),
+                        ("resized", api._on_geometry_changed),
+                        ("minimized", lambda *_: api._set_animation_paused(True)),
+                        ("restored", lambda *_: api._set_animation_paused(False))):
+        try:
+            getattr(window.events, ev).__iadd__(handler)
+        except AttributeError:
+            log.info("pywebview has no '%s' event; skipping", ev)
+
     webview.start(debug=False)
 
 

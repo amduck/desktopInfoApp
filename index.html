@@ -36,7 +36,61 @@
   .frame{
     position:relative;z-index:2;height:100%;display:grid;grid-template-rows:auto 1fr;
     grid-template-columns:1.15fr .85fr;gap:26px;padding:34px 40px 34px;
+    transition:opacity .45s ease, transform .65s cubic-bezier(.22,.61,.36,1);
   }
+  /* ---------- settings modal ---------- */
+  .modal{
+    position:fixed; left:50%; top:50%; z-index:10; width:min(560px,92vw);
+    transform:translate(-50%,-50%);
+    background:rgba(10,12,20,.86); backdrop-filter:blur(14px) saturate(1.4);
+    border:1px solid var(--line); border-radius:18px;
+    box-shadow:0 30px 80px -20px rgba(0,0,0,.8);
+    padding:22px 24px 20px; display:none;
+    font-size:13px;
+  }
+  .modal.open{ display:block; animation:mpop .25s cubic-bezier(.2,.9,.3,1.3) }
+  @keyframes mpop{ from{ opacity:0; transform:translate(-50%,-47%) scale(.97) } to{ opacity:1; transform:translate(-50%,-50%) scale(1) } }
+  .modal h3{
+    margin:0 0 14px; font-size:12px; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--accent); font-weight:600; display:flex; align-items:center; gap:10px;
+  }
+  .mrow{ display:grid; grid-template-columns:110px 1fr; gap:14px; align-items:center; margin-bottom:12px }
+  .mrow > label{ font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:rgba(245,247,255,.55) }
+  .mrow .inputs{ display:grid; grid-template-columns:1fr 1fr; gap:8px }
+  .mrow .inputs.full{ grid-template-columns:1fr }
+  .modal input[type=range]{ width:100%; accent-color:var(--accent); color-scheme:dark }
+  .modal input[type=number], .modal select{
+    background:rgba(255,255,255,.05); border:1px solid var(--line); color:#f5f7ff;
+    border-radius:8px; padding:6px 9px; font-size:12px; outline:none;
+    color-scheme:dark; max-width:100%;
+  }
+  .modal select{ width:100%; -webkit-appearance:none; appearance:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23ff5a3c'/%3E%3C/svg%3E");
+    background-repeat:no-repeat; background-position:right 10px center; padding-right:26px;
+    text-overflow:ellipsis;
+  }
+  .modal select option{ background:#0c0e16; color:#f5f7ff }
+  .modal .presets{ display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px }
+  .chip{
+    padding:6px 12px; border-radius:999px; border:1px solid var(--line);
+    font-size:11px; letter-spacing:.06em; cursor:pointer; user-select:none;
+    color:rgba(245,247,255,.75); background:rgba(255,255,255,.04);
+  }
+  .chip:hover{ border-color:var(--accent); color:#fff }
+  .chip.on{ border-color:var(--accent); background:color-mix(in srgb,var(--accent) 22%,transparent); color:#fff }
+  .msection{ margin:16px 0 8px; padding-top:12px; border-top:1px solid var(--line);
+    font-size:10.5px; letter-spacing:.22em; text-transform:uppercase; color:rgba(245,247,255,.4) }
+  .mactions{ display:flex; gap:8px; margin-top:16px; flex-wrap:wrap }
+  .mbtn{
+    padding:8px 14px; border-radius:10px; border:1px solid var(--line); cursor:pointer;
+    font-size:12px; letter-spacing:.05em; color:rgba(245,247,255,.8); background:rgba(255,255,255,.04);
+  }
+  .mbtn:hover{ border-color:var(--accent-2); color:#fff }
+  .mbtn.primary{ border-color:var(--accent); color:#fff; background:color-mix(in srgb,var(--accent) 25%,transparent) }
+  .mbtn.danger{ border-color:#ff5a5a55; color:#ffb3b3 }
+  .mbtn.danger:hover{ border-color:#ff5a5a; background:color-mix(in srgb,#ff5a5a 18%,transparent) }
+  .mnote{ margin-top:14px; font-size:11px; color:rgba(245,247,255,.4); line-height:1.55 }
+  .mnote b{ color:rgba(245,247,255,.7) }
 
   /* ---------------- top bar ---------------- */
   .topbar{grid-column:1 / -1;display:flex;align-items:center;justify-content:space-between;gap:18px}
@@ -136,7 +190,6 @@
   .foot .src{display:flex;gap:8px;align-items:center}
   .pill{border:1px solid var(--line);border-radius:999px;padding:5px 12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:10px;color:var(--muted)}
   .pill.err{color:#ffb4b6;border-color:rgba(229,72,77,.4);background:rgba(229,72,77,.08)}
-  .draggable{cursor:move}
 
   /* ---------- nav buttons (shared news+gallery) ---------- */
   .nv-btn{width:30px;height:30px;flex:none;border-radius:8px;border:1px solid var(--line);
@@ -163,12 +216,36 @@
     color:var(--ink);font-size:12.5px;line-height:1.5;pointer-events:none;font-weight:450}
   .gallery-meta{margin-top:9px;font-size:10px;color:var(--muted-2);letter-spacing:.04em;
     display:flex;justify-content:space-between;gap:12px}
+  .stat .ex b.dim{color:var(--muted)}
+  /* ---------- narrow / docked windows: single column ---------- */
+  @media (max-width: 760px){
+    .frame{grid-template-columns:minmax(0,1fr);grid-template-rows:none;align-content:start;
+      gap:16px;padding:20px 18px 18px;overflow-y:auto;scrollbar-width:thin}
+    .topbar{flex-wrap:wrap;row-gap:12px}
+    .loc small{letter-spacing:.14em}
+    .clock{gap:12px;margin-left:auto}
+    .ctrls{gap:6px}
+    .btn{width:34px;height:34px;font-size:15px}
+    .temp{font-size:min(150px,32vw)}
+    .stats{gap:10px;margin-top:18px}
+    .stat{padding:13px 12px 12px}
+    .stat .val{font-size:24px}
+    .stat .ex{font-size:11px}
+    .hstrip{overflow-x:auto;scrollbar-width:none}
+    .hstrip::-webkit-scrollbar{display:none}
+    .hcell{flex:0 0 38px}
+    .gallery-stage{min-height:200px}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .dot,.news-dot{animation:none}
+    .modal.open{animation:none}
+  }
 </style>
 </head>
 <body>
   <canvas id="bg"></canvas>
   <div class="grain"></div>
-  <div class="frame draggable" id="frame">
+  <div class="frame" id="frame">
 
     <div class="topbar">
       <div class="brand">
@@ -176,13 +253,14 @@
         <div class="loc">Lane Cove<small>NSW · Australia · -33.80, 151.19</small></div>
       </div>
       <div class="clock">
-        <div class="count" id="count">refresh <b>30</b>s</div>
+        <div class="count" id="count">&nbsp;</div>
         <div>
           <h1 id="clock">--:--</h1>
-          <div class="tz" id="tz">AEST</div>
+          <div class="tz" id="tz">Sydney</div>
         </div>
         <div class="ctrls">
           <div class="btn" id="refresh" title="Refresh now">⟳</div>
+          <div class="btn" id="gear" title="Panel layout">⚙</div>
           <div class="btn" id="min" title="Minimise">–</div>
           <div class="btn close" id="close" title="Close">✕</div>
         </div>
@@ -223,7 +301,7 @@
         </div>
         <div id="newsItems" class="news-items" aria-live="polite"></div>
         <div class="news-foot">
-          <span id="newsMeta">pool — · rotate 20 s · refresh 30 min</span>
+          <span id="newsMeta">loading…</span>
           <a id="newsRefresh" href="#">↻ refresh now</a>
         </div>
       </div>
@@ -242,15 +320,50 @@
           <img id="galImg" alt="" draggable="false" class="gallery-img"/>
           <div class="gallery-cap" id="galCap"></div>
         </a>
-        <div class="gallery-meta" id="galMeta">pool — · rotate 30 s · refresh 30 min</div>
+        <div class="gallery-meta" id="galMeta">loading…</div>
       </div>
     </section>
 
     <div class="foot">
-      <div class="src"><span class="pill" id="pill">Live</span><span id="meta">open-meteo · auto every 30 s</span></div>
-      <div class="draggable" id="dragHint" style="cursor:move">hold anywhere · drag to move</div>
+      <div class="src"><span class="pill" id="pill">Live</span><span id="meta">open-meteo</span></div>
     </div>
   </div>
+
+<div class="modal" id="panelModal" role="dialog" aria-label="Panel settings">
+  <h3>⚙ Panel layout</h3>
+
+  <div class="presets" id="presetRow">
+    <div class="chip" data-preset="default">Default</div>
+    <div class="chip" data-preset="left">Left dock</div>
+    <div class="chip" data-preset="right">Right dock</div>
+    <div class="chip" data-preset="center">Centre</div>
+    <div class="chip" data-preset="full">Full workspace</div>
+  </div>
+
+  <div class="msection">Position (px)</div>
+  <div class="mrow"><label>X · Y</label>
+    <div class="inputs">
+      <input type="number" id="pX" step="4">
+      <input type="number" id="pY" step="4">
+    </div>
+  </div>
+  <div class="msection">Size (px)</div>
+  <div class="mrow"><label>Width</label><input type="number" id="pW" step="8"></div>
+  <div class="mrow"><label>Height</label><input type="number" id="pH" step="8"></div>
+  <div class="mrow"><label style="visibility:hidden">.</label><input type="range" id="pScale" min="360" max="2200" step="20"></div>
+
+  <div class="mnote" id="mNote"></div>
+
+  <div class="mactions">
+    <div class="mbtn primary" id="mApply">Apply &amp; save</div>
+    <div class="mbtn" id="mDefaults">Restore default</div>
+    <div class="mbtn danger" id="mQuit">Quit app</div>
+    <div class="mbtn" id="mClose" style="margin-left:auto">Close</div>
+  </div>
+</div>
+<div class="scrim" id="mScrim" style="display:none;position:fixed;inset:0;z-index:9;background:rgba(0,0,0,.35);backdrop-filter:blur(2px);cursor:default"></div>
+
+
 
 <script>
 const pyw = () => (window.pywebview && window.pywebview.api && typeof window.pywebview.api.get_weather === 'function') ? window.pywebview.api : null;
@@ -280,7 +393,6 @@ function classify(code){
 }
 const COMPASS=['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
 function compass(deg){return COMPASS[Math.round(((deg%360)+360)%360/22.5)%16];}
-function relTime(iso){ /* iso is UTC-agnostic local-ish from TZ; we only show seconds-ago feel via last_success */ return ''; }
 
 /* ---------- palette application ---------- */
 let PAL=['#ff5a3c','#ffb03c','#3aa0ff'];
@@ -295,368 +407,373 @@ function tweenTemp(target){
   requestAnimationFrame(step);
 }
 
-/* ---------- render snapshot ---------- */
-const dayNames=['SUN','MON','TUE','WED','THU','FRI','SAT'];
-function render(s){
-  const d=s.data; if(!d) { renderError(s); return; }
-  const c=classify(d.code); setPalette(c.pal);
-  document.getElementById('cond').textContent=c.label;
-  document.getElementById('condicon').innerHTML=ICONS[c.icon];
-  tweenTemp(d.temp);
-  document.getElementById('feels').textContent=Math.round(d.feels);
-  document.getElementById('wind').innerHTML=Math.round(d.wind)+'<small>km/h</small>';
-  document.getElementById('windex').innerHTML=`${compass(d.wind_dir)} · gusting <b>${Math.round(d.gust)}</b>`;
-  document.getElementById('hum').innerHTML=Math.round(d.humidity)+'<small>%</small>';
-  const hum=d.humidity, t=d.temp;
-  // Magnus dew point from actual temp + RH
-  const a=17.625,b=243.04;
-  const gamma=Math.log(hum/100)+a*t/(b+t);
-  const dp=(b*gamma)/(a-gamma);
-  document.getElementById('humex').innerHTML=`dew <b>${Math.round(dp)}</b>°`;
-  const pTrend=d.pressure>=1013?'steady high':d.pressure<1000?'low & falling':'building';
-  document.getElementById('pres').innerHTML=Math.round(d.pressure)+'<small>hPa</small>';
-  document.getElementById('presex').innerHTML=`<b>${pTrend}</b>`;
-  document.getElementById('updated').textContent=`updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
-  document.getElementById('pill').className='pill'; document.getElementById('pill').textContent='Live';
+const $ = id => document.getElementById(id);
+function esc(u){ return String(u==null?'':u).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function hhmm(tsSec){ return new Date(tsSec*1000).toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Australia/Sydney'}); }
+function agoText(tsSec){
+  if(!tsSec) return '—';
+  const s=Math.max(0,Math.floor(Date.now()/1000-tsSec));
+  return s<60?'just now':s<3600?`${Math.floor(s/60)} min ago`:`${Math.floor(s/3600)} h ago`;
+}
+function openExternal(u){
+  const api=pyw();
+  if(api && api.open_url){ api.open_url(u).catch(()=>window.open(u,'_blank')); }
+  else window.open(u,'_blank');
+}
 
-  // hourly (next 24h)
+/* ================= weather ================= */
+let W_SNAP=null;
+function render(s){
+  W_SNAP=s;
+  const d=s.data; if(!d){ renderError(s); return; }
+  const c=classify(d.code); setPalette(c.pal);
+  $('cond').textContent=c.label;
+  $('condicon').innerHTML=ICONS[c.icon];
+  tweenTemp(d.temp);
+  $('feels').textContent=Math.round(d.feels);
+  $('wind').innerHTML=Math.round(d.wind)+'<small>km/h</small>';
+  $('windex').innerHTML=`${compass(d.wind_dir)} · gusting <b>${Math.round(d.gust)}</b>`;
+  $('hum').innerHTML=Math.round(d.humidity)+'<small>%</small>';
+  // Magnus dew point from temperature + RH
+  const a=17.625,b=243.04, g=Math.log(Math.max(1,d.humidity)/100)+a*d.temp/(b+d.temp);
+  $('humex').innerHTML=`dew <b>${Math.round((b*g)/(a-g))}</b>°`;
+  $('pres').innerHTML=Math.round(d.pressure)+'<small>hPa</small>';
+  if(d.pressure_tendency){
+    const sign=d.pressure_delta_3h>0?'+':d.pressure_delta_3h<0?'−':'';
+    $('presex').innerHTML=`<b>${esc(d.pressure_tendency)}</b> · ${sign}${Math.abs(d.pressure_delta_3h)} hPa / 3 h`;
+  } else $('presex').innerHTML='<b class="dim">tendency n/a</b>';
+  $('updated').textContent=s.success_ts?`updated ${hhmm(s.success_ts)}`:'';
+  const pill=$('pill');
+  if(s.error){ pill.className='pill err'; pill.textContent='Stale'; pill.title=s.error; }
+  else { pill.className='pill'; pill.textContent='Live'; pill.title=''; }
+  $('meta').textContent=`open-meteo · every ${Math.round(s.refresh_seconds/60)} min`;
   renderHourly(d);
   renderDays(d);
 }
 function renderError(s){
-  document.getElementById('cond').textContent=(s&&s.error)?('offline — '+s.error):'no data yet';
-  document.getElementById('pill').className='pill err'; document.getElementById('pill').textContent='Stale';
-}
-/* Push channel: Python calls this every time new data lands —
-   completely bypasses the JS→Python bridge for the data path. */
-window.__lc_onData = function(s){
-  if(!s) return;
-  window.__lc_recv  = (window.__lc_recv||0)+1;
-  if(s.refresh_seconds) REF = s.refresh_seconds;
-  lastFetch = Date.now();
-  try{
-    if(s.ok && s.data){ render(s); window.__lc_state="ok recv="+window.__lc_recv; }
-    else { renderError(s); window.__lc_state="err recv="+window.__lc_recv+" err="+String(s.error); }
-  }catch(e){
-    window.__lc_state="RENDER_ERR recv="+window.__lc_recv+" e="+String(e);
-    renderError({error:String(e)});
-  }
-};
-function _sydneyNowParts(){
-  // Robust "now" in Australia/Sydney, independent of any locale's toLocaleString format.
-  const opt={timeZone:'Australia/Sydney',year:'numeric',month:'2-digit',day:'2-digit'};
-  const dp=new Intl.DateTimeFormat('en-CA',opt).formatToParts(new Date()).reduce((a,p)=>(a[p.type]=p.value,a),{});
-  const tp=new Intl.DateTimeFormat('en-GB',{timeZone:'Australia/Sydney',hour:'2-digit',minute:'2-digit',hour12:false}).formatToParts(new Date()).reduce((a,p)=>(a[p.type]=p.value,a),{});
-  const hh=String(tp.hour).padStart(2,'0'), mm=String(tp.minute).padStart(2,'0');
-  return {ds:`${dp.year}-${dp.month}-${dp.day}`, hh:hh, mm:mm, hm:`${hh}${mm}`, hhmm:`${hh}:${mm}`};
+  $('cond').textContent=(s&&s.error)?('offline — '+s.error):'waiting for data…';
+  const pill=$('pill'); pill.className='pill err'; pill.textContent=(s&&s.error)?'Offline':'Waiting';
 }
 function renderHourly(d){
-  const strip=document.getElementById('hstrip'); strip.innerHTML='';
-  const n=d.h_time? d.h_time.length:0; if(!n) return;
-  // Anchor the leftmost cell to the CURRENT SYDNEY hour: start at the last
-  // data point at or before "now", so the strip always shows now..now+23.
-  // h_time values are 'YYYY-MM-DDTHH:mm' local (Australia/Sydney) ISO strings.
-  const now=_sydneyNowParts();
-  const nowISO=now.ds+'T'+now.hhmm;
-  let start=-1;
-  for(let i=n-1;i>=0;i--){
-    const iso=d.h_time[i];
-    if(iso.slice(0,10)===now.ds && iso.slice(11,16)<=now.hm){ start=i; break; }
-  }
-  if(start<0){
-    // Data predates/hasn't started today yet (UTC edge at midnight): fall back to
-    // the last point on the previous date in the array, so we still show a valid window.
-    for(let i=n-1;i>=0;i--){ if(d.h_time[i].slice(0,10)<now.ds){ start=i; break; } }
-  }
-  if(start<0) start=n-1;
-  const items=[]; let maxRain=0;
-  for(let i=start;i<Math.min(start+24,n);i++){
-    const lab=d.h_time[i].slice(11,13);
-    const rain=d.h_rain? Math.max(0,Math.round(d.h_rain[i]||0)):0; maxRain=Math.max(maxRain,rain);
-    const ic=classify(d.h_code? d.h_code[i]:0).icon;
-    items.push({lab,rain,ic,temp:d.h_temp[i]});
-  }
-  items.forEach((it,idx)=>{
-    const cell=document.createElement('div'); cell.className='hcell'+(idx===0?' now':'');
-    cell.innerHTML=`<div class="hh">${it.lab}</div><div class="hi">${ICONS[it.ic]}</div><div class="ht">${Math.round(it.temp)}°</div><div class="hr">${it.rain?it.rain+'%':''}</div>`;
-    cell.title=`${it.lab}:00 · ${Math.round(it.temp)}° · rain ${it.rain}%`;
+  // Python already slices the series to start at the current Sydney hour.
+  const strip=$('hstrip'); strip.innerHTML='';
+  const n=(d.h_hour||[]).length; if(!n) return;
+  let maxRain=0;
+  for(let i=0;i<n;i++){
+    const rain=Math.max(0,Math.round((d.h_rain&&d.h_rain[i])||0)); maxRain=Math.max(maxRain,rain);
+    const ic=classify(d.h_code?d.h_code[i]:0).icon, t=Math.round(d.h_temp[i]), lab=d.h_hour[i];
+    const cell=document.createElement('div'); cell.className='hcell'+(i===0?' now':'');
+    cell.innerHTML=`<div class="hh">${lab}</div><div class="hi">${ICONS[ic]}</div><div class="ht">${t}°</div><div class="hr">${rain?rain+'%':''}</div>`;
+    cell.title=`${lab}:00 · ${t}° · rain ${rain}%`;
     strip.appendChild(cell);
-  });
-  document.getElementById('hrain').textContent=maxRain?`max rain ${maxRain}%`:'no rain flagged';
-  window.__lc_hourlyStart=items[0]?items[0].lab:''; window.__lc_nowHM=now.hhmm;
-  // Hour-rollover self-heal: if the leftmost hour predates the current Sydney
-  // hour AND the cached snapshot is stale (>45 s), nudge a re-fetch so data
-  // catches up. Data already contains the full next-day window, so this is a
-  // no-op in steady state.
-  const firstLab=items.length?items[0].lab:'';
-  const want=currentHourStr();
-  if(firstLab && firstLab!==want && Date.now()-lastFetch>45000 && pyw() && pyw().refresh_now){
-    try{ pyw().refresh_now(); setTimeout(load,1500); }catch(_){}
   }
+  $('hrain').textContent=maxRain?`max rain ${maxRain}%`:'no rain flagged';
 }
-function currentHourStr(){ return new Date().toLocaleString('en-GB',{timeZone:'Australia/Sydney',hour:'2-digit',hour12:false}); }
 function renderDays(d){
-  const dd=document.getElementById('days'); dd.innerHTML='';
-  const lows=d.d_min, highs=d.d_max; let gmin=Math.min(...lows), gmax=Math.max(...highs);
+  const dd=$('days'); dd.innerHTML='';
+  const lows=d.d_min, highs=d.d_max; if(!lows||!lows.length) return;
+  const gmin=Math.min(...lows), gmax=Math.max(...highs), span=Math.max(1,gmax-gmin);
   d.d_time.forEach((day,i)=>{
     const c=classify(d.d_code[i]);
-    const loPct=((lows[i]-gmin)/Math.max(1,gmax-gmin))*100, hiPct=((highs[i]-gmin)/Math.max(1,gmax-gmin))*100;
-    const nm=i===0?'TODAY':dayNames[new Date(day+'T00:00').getDay()];
+    const loPct=(lows[i]-gmin)/span*100, hiPct=(highs[i]-gmin)/span*100;
+    const rain=d.d_rain&&d.d_rain[i]?`<span class="dr">💧${Math.round(d.d_rain[i])}%</span>`:'';
     const row=document.createElement('div'); row.className='drow';
-    row.innerHTML=`<div class="dn">${nm}</div><div class="di">${ICONS[c.icon]}</div>
-      <div class="dt"><div class="tmin" style="margin:0;width:100%">${Math.round(lows[i])}° &nbsp;·&nbsp; ${Math.round(highs[i])}° ${d.d_rain&&d.d_rain[i]?`<span class="dr">💧${Math.round(d.d_rain[i])}%</span>`:''}
+    row.innerHTML=`<div class="dn">${esc(d.d_name?d.d_name[i]:day)}</div><div class="di">${ICONS[c.icon]}</div>
+      <div class="dt"><div class="tmin" style="margin:0;width:100%">low ${Math.round(lows[i])}° ${rain}
         <div class="scale" style="margin-top:6px"><i style="left:${loPct}%"></i><i style="left:${hiPct}%"></i></div></div></div>
       <div class="tt">${Math.round(highs[i])}°</div>`;
     dd.appendChild(row);
   });
 }
-function curDate(){ return new Date().toLocaleDateString('en-CA',{timeZone:'Australia/Sydney'}); }
 
-/* ---------- clock + 30s countdown ---------- */
+/* ---------- clock: zone abbreviation follows DST (AEST / AEDT) ---------- */
+const TZ_FMT=new Intl.DateTimeFormat('en-AU',{timeZone:'Australia/Sydney',timeZoneName:'short'});
+function tzAbbrev(){ const p=TZ_FMT.formatToParts(new Date()).find(x=>x.type==='timeZoneName'); return p?p.value.toUpperCase():'SYDNEY'; }
 function tickClock(){
-  const t=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',timeZone:'Australia/Sydney'});
-  document.getElementById('clock').textContent=t;
-  document.getElementById('tz').textContent='AEST · Australia/Sydney';
+  $('clock').textContent=new Date().toLocaleTimeString('en-AU',{hour:'2-digit',minute:'2-digit',hourCycle:'h23',timeZone:'Australia/Sydney'});
+  $('tz').textContent=`${tzAbbrev()} · Australia/Sydney`;
+  if(W_SNAP && W_SNAP.success_ts){
+    const next=W_SNAP.success_ts+W_SNAP.refresh_seconds-Date.now()/1000;
+    $('count').innerHTML=next>0?`next <b>${Math.ceil(next/60)}</b> min`:'refreshing…';
+  }
 }
-let lastFetch=Date.now(), REF=30;
 setInterval(tickClock,1000); tickClock();
 
-/* ---------- pywebview wiring ---------- */
+/* ---------- bridge polling (local reads only; Python owns the network) ---------- */
 async function load(){
   const api=pyw(); if(!api) return;
-  try{
-    const raw=await api.get_weather();
-    if(!raw) return;
-    const s=(raw.data!==undefined)?raw:({ok:raw&&raw.data?true:false,error:raw.error,data:raw.data,refresh_seconds:raw.refresh_seconds||REF});
-    if(s&&s.refresh_seconds) REF=s.refresh_seconds;
-    lastFetch=Date.now();
-    render(s);
-  }catch(e){ renderError({error:String(e)}); }
+  try{ render(await api.get_weather()); }
+  catch(e){ renderError({error:String(e)}); }
 }
-async function manual(){ const api=pyw(); if(api && api.refresh_now){ await api.refresh_now(); load(); } }
-
-/* Belt-and-braces: if the push channel missed for any reason,
-   retry a bridge call every 20 s so the page can't stay stuck. */
-setInterval(load, 20000);
+/* Ask Python to refetch, then poll until success_ts or error changes (max ~20 s). */
+async function refreshAndWait(trigger, get, apply){
+  const api=pyw(); if(!api) return;
+  let before=null;
+  try{ before=await get(api); }catch(_){}
+  try{ await trigger(api); }catch(_){}
+  for(let i=0;i<20;i++){
+    await new Promise(r=>setTimeout(r,1000));
+    let s=null; try{ s=await get(api); }catch(_){ continue; }
+    if(!before || s.success_ts!==before.success_ts || s.error!==before.error){ apply(s); return; }
+  }
+}
+function manual(){ return refreshAndWait(a=>a.refresh_now(), a=>a.get_weather(), render); }
+setInterval(load, 30000);
 
 /* ================= news feed ================= */
-const NEWS_ROTATE_MS = 20000;
-const NEWS_VISIBLE   = 5;
-let newsPool = [], newsRot = 0;
-function esc(u){ return String(u||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const NEWS_ROTATE_MS=20000, NEWS_VISIBLE=5;
+let newsPool=[], newsRot=0, newsFetched=null;
 function paintNews(){
-  const wrap = document.getElementById('newsItems');
-  const n = newsPool.length; if(!n) return;
-  const rows = [];
+  const wrap=$('newsItems'), n=newsPool.length; if(!n) return;
+  const rows=[];
   for(let k=0;k<Math.min(NEWS_VISIBLE,n);k++){
-    const it = newsPool[(newsRot + k) % n];
-    const b = (it.c === 'Tech') ? 'tech' : 'world';
-    rows.push(`<div class="news-item"><span class="news-badge badge-${b}">${b}</span><a href="${esc(it.u)}" target="_self">${esc(it.t)}</a></div>`);
+    const it=newsPool[(newsRot+k)%n], b=(it.c==='Tech')?'tech':'world';
+    rows.push(`<div class="news-item"><span class="news-badge badge-${b}">${b}</span><a href="${esc(it.u)}">${esc(it.t)}</a></div>`);
   }
-  wrap.innerHTML = rows.join('');
-  wrap.querySelectorAll('a').forEach(a=>{
-    a.addEventListener('click', e=>{
-      e.preventDefault();
-      const u = a.getAttribute('href');
-      const api = pyw();
-      if(api && api.open_url){ try{ api.open_url(u); }catch(_){ window.open(u, '_blank'); } }
-      else window.open(u, '_blank');
-    });
-  });
+  wrap.innerHTML=rows.join('');
+  wrap.querySelectorAll('a').forEach(a=>a.addEventListener('click',e=>{ e.preventDefault(); openExternal(a.getAttribute('href')); }));
 }
-async function loadNews(force){
-  const api = pyw(); if(!api || typeof api.get_news !== 'function') return;
-  try{
-    let raw = await api.get_news();
-    if(!raw && force && api.refresh_news){
-      raw = await api.refresh_news();
-      raw = await api.get_news();
-    }
-    const s = (raw && raw.data !== undefined) ? raw
-             : {ok: raw && !!raw.data, error: raw && raw.error, data: raw && raw.data, success_ts: raw && raw.success_ts};
-    if(s && s.ok && s.data && Array.isArray(s.data.pool)){
-      newsPool = s.data.pool;
-      newsRot  = 0;
-      paintNews();
-      const ago = s.success_ts ? Math.max(0, Math.floor(Date.now()/1000 - s.success_ts)) : null;
-      document.getElementById('newsMeta').textContent =
-        `pool ${newsPool.length} · rotate 20 s · refresh ${ago===null?'—': ago+'s ago'}`;
-    } else {
-      document.getElementById('newsMeta').textContent = 'pool — ' + ((s && s.error) || 'no stories yet');
-    }
-  }catch(e){
-    try{ document.getElementById('newsMeta').textContent = 'pool — error: ' + String(e); }catch(_){}
+function applyNews(s){
+  if(s && s.ok && s.data && Array.isArray(s.data.pool)){
+    if(s.data.fetched_ts!==newsFetched){ newsPool=s.data.pool; newsRot=0; newsFetched=s.data.fetched_ts; paintNews(); }
+    const warn=s.error?' · last refresh failed':'';
+    $('newsMeta').textContent=`${newsPool.length} stories · rotate 20 s · updated ${agoText(s.success_ts)}${warn}`;
+  } else {
+    $('newsMeta').textContent=(s&&s.error)?('offline — '+s.error):'loading…';
   }
 }
-setInterval(()=>{ if(newsPool.length > NEWS_VISIBLE){ newsRot = (newsRot + 1) % newsPool.length; paintNews(); } }, NEWS_ROTATE_MS);
-setInterval(()=>loadNews(true), 30*60*1000);
-document.getElementById('newsRefresh').addEventListener('click', e=>{
-  e.preventDefault();
-  try{ document.getElementById('newsMeta').textContent = 'refreshing…'; }catch(_){}
-  loadNews(true);
+async function loadNews(){ const api=pyw(); if(!api) return; try{ applyNews(await api.get_news()); }catch(e){ $('newsMeta').textContent='error: '+e; } }
+setInterval(()=>{ if(newsPool.length>NEWS_VISIBLE){ newsRot=(newsRot+1)%newsPool.length; paintNews(); } }, NEWS_ROTATE_MS);
+setInterval(loadNews, 60000);
+$('newsRefresh').addEventListener('click',e=>{
+  e.preventDefault(); $('newsMeta').textContent='refreshing…';
+  refreshAndWait(a=>a.refresh_news(), a=>a.get_news(), applyNews);
 });
+$('newsPrev').addEventListener('click',()=>{ if(newsPool.length){ newsRot=(newsRot-1+newsPool.length)%newsPool.length; paintNews(); } });
+$('newsNext').addEventListener('click',()=>{ if(newsPool.length){ newsRot=(newsRot+1)%newsPool.length; paintNews(); } });
 
-
-/* ---------- news nav buttons (manual page-step) ---------- */
-try{
-  document.getElementById('newsPrev').addEventListener('click', ()=>{
-    if(newsPool.length) newsRot=(newsRot-1+newsPool.length)%newsPool.length; paintNews();
-  });
-  document.getElementById('newsNext').addEventListener('click', ()=>{
-    if(newsPool.length) newsRot=(newsRot+1)%newsPool.length; paintNews();
-  });
-}catch(_){}
-
-/* ================= gallery — 5 curated images, 30 s rotate, 30 min refresh ================= */
-let galPool = [], galRot = 0;
-function galCurrent(){ return galPool.length ? galPool[galRot % galPool.length] : null; }
+/* ================= gallery ================= */
+let galPool=[], galRot=0, galFetched=null;
+function galCurrent(){ return galPool.length?galPool[galRot%galPool.length]:null; }
 function paintGallery(){
-  const it = galCurrent(); if(!it) return;
-  const img  = document.getElementById('galImg');
-  const cap  = document.getElementById('galCap');
-  const link = document.getElementById('galLink');
-  img.src = it.img; img.alt = it.t || '';
-  cap.textContent = it.t || '';
-  if(it.u){ link.href = it.u; link.setAttribute('title','open: ' + it.u); }
+  const it=galCurrent(); if(!it) return;
+  $('galImg').src=it.img; $('galImg').alt=it.t||'';
+  $('galCap').textContent=it.t||'';
+  if(it.u){ $('galLink').href=it.u; $('galLink').title='open: '+it.u; }
 }
 async function loadGallery(){
-  const api = pyw(); if(!api || typeof api.get_gallery !== 'function') return;
+  const api=pyw(); if(!api) return;
   try{
-    let raw = await api.get_gallery();
-    if(!raw || (raw && raw.ok !== true)){
-      const e = raw && (raw.error || 'waiting for images…');
-      try{ document.getElementById('galMeta').textContent = 'pool — ' + e; }catch(_){}
-      return;
+    const s=await api.get_gallery();
+    if(!s || !s.ok){ $('galMeta').textContent=(s&&s.error)?('offline — '+s.error):'loading images…'; return; }
+    if(s.data.fetched_ts!==galFetched){
+      galPool=(s.data.pool||[]).filter(x=>x&&x.img); galFetched=s.data.fetched_ts;
+      if(galRot>=galPool.length) galRot=0;
+      paintGallery();
     }
-    const data = raw.data || {};
-    const pool = Array.isArray(data.pool) ? data.pool : [];
-    galPool = pool.filter(x => x && x.img);
-    if(galRot >= galPool.length) galRot = 0;
-    paintGallery();
-    const ago = raw.success_ts ? Math.max(0, Math.floor(Date.now()/1000 - raw.success_ts)) : null;
-    document.getElementById('galMeta').textContent =
-      `pool ${galPool.length} · rotate 30 s · refresh ${ago===null?'—': ago+'s ago'}`;
-  }catch(err){
-    try{ document.getElementById('galMeta').textContent = 'pool — error: ' + String(err); }catch(_){}
-  }
+    $('galMeta').textContent=`${galPool.length} images · rotate 30 s${s.error?' · last refresh failed':''}`;
+  }catch(e){ $('galMeta').textContent='error: '+e; }
 }
 setInterval(()=>{ if(galPool.length){ galRot=(galRot+1)%galPool.length; paintGallery(); } }, 30000);
-setInterval(()=>{ if(galPool.length) loadGallery(); }, 30*60*1000);
-try{
-  document.getElementById('galPrev').addEventListener('click', ()=>{
-    if(galPool.length){ galRot=(galRot-1+galPool.length)%galPool.length; paintGallery(); }
-  });
-  document.getElementById('galNext').addEventListener('click', ()=>{
-    if(galPool.length){ galRot=(galRot+1)%galPool.length; paintGallery(); }
-  });
-  // stage click → open article (already native <a>, so just prevent the '#' jump and use our own logic)
-  document.getElementById('galLink').addEventListener('click', (e)=>{
-    const it = galCurrent();
-    e.preventDefault();
-    if(it && it.u){
-      const api = pyw();
-      if(api && api.open_url){ try{ api.open_url(it.u); }catch(_){ window.open(it.u,'_blank'); } }
-      else window.open(it.u,'_blank');
-    }
-  });
-}catch(_){}
+setInterval(loadGallery, 5*60000);
+$('galPrev').addEventListener('click',()=>{ if(galPool.length){ galRot=(galRot-1+galPool.length)%galPool.length; paintGallery(); } });
+$('galNext').addEventListener('click',()=>{ if(galPool.length){ galRot=(galRot+1)%galPool.length; paintGallery(); } });
+$('galLink').addEventListener('click',e=>{ e.preventDefault(); const it=galCurrent(); if(it&&it.u) openExternal(it.u); });
 
-/* drag + buttons */
-document.getElementById('close').onclick=()=>{ const a=pyw(); a&&a.close(); };
-document.getElementById('refresh').onclick=manual;
-document.getElementById('min').onclick=()=>{ const a=pyw(); a&&a.minimise(); };
-function wireDrag(){
-  const f=document.getElementById('frame');
-  f.addEventListener('pointerdown',e=>{ if(e.target.closest('.btn')) return; try{ const a=pyw(); if(a&&a.drag) a.drag(); }catch(_){} });
-}
+/* ================= window buttons ================= */
+$('close').onclick=()=>{ const a=pyw(); a&&a.quit_app(); };
+$('min').onclick=()=>{ const a=pyw(); a&&a.minimise(); };
+$('refresh').onclick=manual;
 
 /* ============================================================
-   ABSTRACT BACKGROUND — flow-field ribbons + drifting orbs,
-   additive glow. GPU-friendly canvas 2d. Re-tinted by palette.
+   ABSTRACT BACKGROUND — flow-field ribbons + drifting orb.
+   Capped at 30 fps, paused while hidden/minimised, and a single
+   static frame when the OS asks for reduced motion.
    ============================================================ */
-const bg=document.getElementById('bg'); const ctx=bg.getContext('2d');
-let W,H,DPR, mouse={x:.5,y:.5}, running=true;
-function resize(){ DPR=Math.min(2,window.devicePixelRatio||1); W=bg.clientWidth=innerWidth; H=bg.clientHeight=innerHeight; bg.width=W*DPR; bg.height=H*DPR; ctx.setTransform(DPR,0,0,DPR,0,0); }
-addEventListener('resize',resize); resize();
+const bg=$('bg'), ctx=bg.getContext('2d');
+let W,H,DPR, mouse={x:.5,y:.5};
+const FRAME_MS=1000/30;
+const reduceMQ=matchMedia('(prefers-reduced-motion: reduce)');
+let pausedExternally=false;
+function resize(){ DPR=Math.min(2,window.devicePixelRatio||1); W=innerWidth; H=innerHeight; bg.width=W*DPR; bg.height=H*DPR; bg.style.width=W+'px'; bg.style.height=H+'px'; ctx.setTransform(DPR,0,0,DPR,0,0); orbKey=''; }
+addEventListener('resize',()=>{ resize(); if(!animating()) drawFrame(performance.now()); });
 addEventListener('pointermove',e=>{ mouse.x=e.clientX/innerWidth; mouse.y=e.clientY/innerHeight; });
 
 function hexToRgba(hex,a){ const c=hex.replace('#',''); const n=parseInt(c.length===3?c.split('').map(x=>x+x).join(''):c,16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
 
-const N=150; const pts=[];
-function seed(i){ pts[i]={x:Math.random()*W,y:Math.random()*H,vx:0,vy:0,a:Math.random(),hue:Math.random()}; }
-for(let i=0;i<N;i++) seed(i);
+/* The orb gradient only depends on palette + size: render it once to an
+   offscreen canvas and blit it, instead of building a gradient per frame. */
+let orb=null, orbKey='';
+function orbSprite(){
+  const R=Math.ceil(Math.max(W,H)*0.62), key=PAL.join()+R;
+  if(key===orbKey) return orb;
+  orb=document.createElement('canvas'); orb.width=orb.height=R*2;
+  const o=orb.getContext('2d'), g=o.createRadialGradient(R,R,0,R,R,R);
+  g.addColorStop(0,hexToRgba(PAL[0],0.16)); g.addColorStop(.5,hexToRgba(PAL[2],0.05)); g.addColorStop(1,'rgba(6,7,12,0)');
+  o.fillStyle=g; o.fillRect(0,0,R*2,R*2); orbKey=key; return orb;
+}
 
+const N=150, pts=[];
+function seed(i){ pts[i]={x:Math.random()*W,y:Math.random()*H,vx:0,vy:0,hue:Math.random()}; }
+resize(); for(let i=0;i<N;i++) seed(i);
 function flow(x,y,t){
   const s=0.0016;
-  const a=Math.sin(x*s+ t*0.00022)+Math.cos(y*s*1.3 - t*0.00017);
-  const b=Math.sin((x+y)*s*0.7 + t*0.00011);
+  const a=Math.sin(x*s+t*0.00022)+Math.cos(y*s*1.3-t*0.00017);
+  const b=Math.sin((x+y)*s*0.7+t*0.00011);
   return (a+b)*Math.PI*0.55;
 }
-let last=0;
-function frame(t){
-  if(!running) return requestAnimationFrame(frame);
-  const dt=Math.min(40, t-last||16); last=t;
-  // trail fade — translucent dark wash for streaks
+function drawFrame(t){
   ctx.globalCompositeOperation='source-over';
-  ctx.fillStyle='rgba(6,7,12,0.20)'; ctx.fillRect(0,0,W,H);
-  // drifting soft orbs (big blurred discs)
-  const ox=W*(0.5+0.22*Math.sin(t*0.00006)+ (mouse.x-0.5)*0.3);
+  ctx.fillStyle='rgba(6,7,12,0.36)'; ctx.fillRect(0,0,W,H);  // = two 60 fps fades of 0.20
+  const ox=W*(0.5+0.22*Math.sin(t*0.00006)+(mouse.x-0.5)*0.3);
   const oy=H*(0.42+0.2*Math.cos(t*0.00005)+(mouse.y-0.5)*0.3);
-  let g=ctx.createRadialGradient(ox,oy,0,ox,oy,Math.max(W,H)*0.62);
-  g.addColorStop(0,hexToRgba(PAL[0],0.16)); g.addColorStop(.5,hexToRgba(PAL[2],0.05)); g.addColorStop(1,'rgba(6,7,12,0)');
-  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-
-  // ribbons
-  ctx.globalCompositeOperation='lighter';
-  ctx.lineWidth=1.5;
+  const sp=orbSprite(), R=sp.width/2; ctx.drawImage(sp,ox-R,oy-R);
+  ctx.globalCompositeOperation='lighter'; ctx.lineWidth=1.5;
   for(let i=0;i<N;i++){
-    const p=pts[i];
-    const ang=flow(p.x,p.y,t);
-    const sp=0.6+ (Math.sin(p.hue*6.28+t*0.001)*0.5+0.5)*1.1;
-    p.vx+= Math.cos(ang)*sp*0.05 - p.vx*0.06;
-    p.vy+= Math.sin(ang)*sp*0.05 - p.vy*0.06;
-    const nx=p.x+p.vx*3.2, ny=p.y+p.vy*3.2;
-    const col=PAL[Math.floor(p.hue*PAL.length)%PAL.length];
-    ctx.strokeStyle=hexToRgba(col,0.5);
+    const p=pts[i], ang=flow(p.x,p.y,t);
+    const spd=0.6+(Math.sin(p.hue*6.28+t*0.001)*0.5+0.5)*1.1;
+    // velocities tuned for 60 fps; scale steps so motion speed is unchanged at 30 fps
+    p.vx+=Math.cos(ang)*spd*0.1-p.vx*0.12;
+    p.vy+=Math.sin(ang)*spd*0.1-p.vy*0.12;
+    const nx=p.x+p.vx*6.4, ny=p.y+p.vy*6.4;
+    ctx.strokeStyle=hexToRgba(PAL[Math.floor(p.hue*PAL.length)%PAL.length],0.5);
     ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(nx,ny); ctx.stroke();
     p.x=nx; p.y=ny;
-    if(p.x<-20||p.x>W+20||p.y<-20||p.y>H+20){ seed(i); p.vx=0;p.vy=0; }
+    if(p.x<-20||p.x>W+20||p.y<-20||p.y>H+20) seed(i);
   }
-  requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+function animating(){ return !document.hidden && !pausedExternally && !reduceMQ.matches; }
+let rafId=0, lastDraw=0;
+function loop(t){
+  rafId=0;
+  if(!animating()) return;
+  if(t-lastDraw>=FRAME_MS){ lastDraw=t; drawFrame(t); }
+  rafId=requestAnimationFrame(loop);
+}
+function syncAnimation(){
+  if(animating()){ if(!rafId) rafId=requestAnimationFrame(loop); return; }
+  if(rafId){ cancelAnimationFrame(rafId); rafId=0; }
+  if(reduceMQ.matches){ // one settled still frame
+    ctx.fillStyle='#06070c'; ctx.fillRect(0,0,W,H);
+    for(let k=0;k<40;k++) drawFrame(k*33);
+  }
+}
+document.addEventListener('visibilitychange',syncAnimation);
+reduceMQ.addEventListener('change',syncAnimation);
+window.__lc_pause=function(p){ pausedExternally=!!p; syncAnimation(); };  // called by Python on minimise/restore
+syncAnimation();
 
-/* boot — log every step so a hung/throwing path is visible */
+/* ================= boot ================= */
 const __bootLog=[];
-function bLog(m){ __bootLog.push(`${Date.now()%100000}:${m}`); try{ window.__lc_bootLog=__bootLog; }catch(_){} }
+function bLog(m){ __bootLog.push(`${Date.now()%100000}:${m}`); window.__lc_bootLog=__bootLog; }
+window.addEventListener('unhandledrejection',e=>bLog(`unhandledrej:${e.reason}`));
+window.addEventListener('error',e=>bLog(`windowerr:${e.message}@${e.lineno}`));
 
 async function boot(){
-  bLog("boot:start");
   let guard=0;
-  while(!pyw() && guard++ < 200){ bLog(`boot:wait ${guard}`); await new Promise(r=>setTimeout(r,250)); }
-  bLog(`boot:pyw=${!!pyw()} guard=${guard}`);
-  if(pyw()) {
-    try{ bLog("boot:call load"); await load(); bLog("boot:load ok"); }
-    catch(e){ bLog(`boot:load exc: ${e}`); }
-    try{ bLog("boot:news"); await loadNews(false); bLog("boot:news ok"); }
-    catch(e){ bLog(`boot:news exc ${e}`); }
-    try{ bLog("boot:gallery"); await loadGallery(); bLog("boot:gallery ok"); }
-    catch(e){ bLog(`boot:gallery exc ${e}`); }
-    try{ wireDrag(); }catch(_){}
-  } else {
-    bLog("boot:GAVE UP on pyw()");
-    // Last resort: still try to render from a bare fetch via document.title marker
-    try{ document.title = "no bridge"; }catch(_){}
+  while(!pyw() && guard++<200) await new Promise(r=>setTimeout(r,100));
+  if(!pyw()){ bLog('boot: no bridge'); renderError({error:'no Python bridge'}); return; }
+  await Promise.all([load(), loadNews(), loadGallery()]);
+  // first fetches happen in the background after launch; poll briskly until all three have data
+  for(let i=0;i<30 && (!W_SNAP||!W_SNAP.data||!newsPool.length||!galPool.length);i++){
+    await new Promise(r=>setTimeout(r,2000));
+    await Promise.all([load(), loadNews(), loadGallery()]);
   }
+  bLog('boot: done');
 }
 boot();
-window.addEventListener("unhandledrejection",e=>bLog(`unhandledrej:${e.reason}`));
-window.addEventListener("error",e=>bLog(`windowerr:${e.message}@${e.lineno}`));
-setInterval(()=>{ // 30s auto-refresh (server also loops; belt & braces)
-  const remain=Math.max(0,REF-Math.round((Date.now()-lastFetch)/1000));
-  document.getElementById('count').innerHTML=`refresh <b>${remain}</b>s`;
-},1000);
-setTimeout(()=>document.getElementById('dragHint').style.opacity=.5,4000);
+
+/* ============================================================
+   PANEL LAYOUT — position / size presets for the native window
+   bridge: get_panel(), save_panel(x,y,w,h), quit_app()
+   ============================================================ */
+(function(){
+  let P=null, WORK=[0,0,1920,1080], MONS=[WORK];
+  const MIN={w:360,h:280};
+  function monitorFor(r){
+    let best=MONS[0], bestA=-1;
+    for(const m of MONS){
+      const ix=Math.max(0,Math.min(r.x+r.w,m[0]+m[2])-Math.max(r.x,m[0]));
+      const iy=Math.max(0,Math.min(r.y+r.h,m[1]+m[3])-Math.max(r.y,m[1]));
+      if(ix*iy>bestA){ best=m; bestA=ix*iy; }
+    }
+    return best;
+  }
+  function clampRect(r){
+    const w=Math.max(MIN.w,Math.min(3840,r.w)), h=Math.max(MIN.h,Math.min(2400,r.h));
+    const m=monitorFor({x:r.x,y:r.y,w,h});
+    const x=Math.max(m[0]-w+120,Math.min(m[0]+m[2]-120,r.x));
+    const y=Math.max(m[1],Math.min(m[1]+m[3]-60,r.y));
+    return {x:x|0,y:y|0,w:w|0,h:h|0};
+  }
+  const M={
+    modal:$('panelModal'), scrim:$('mScrim'),
+    x:$('pX'), y:$('pY'), w:$('pW'), h:$('pH'), scale:$('pScale'), note:$('mNote'),
+    apply:$('mApply'), defaults:$('mDefaults'), quit:$('mQuit'), close:$('mClose'),
+  };
+  async function refreshPanel(){
+    const a=pyw(); if(!a) return;
+    try{
+      const g=await a.get_panel();
+      P=g.panel; WORK=g.work||WORK; MONS=(g.monitors&&g.monitors.length)?g.monitors:[WORK];
+      if(g.min) Object.assign(MIN,g.min);
+    }catch(e){ bLog('get_panel err '+e); }
+  }
+  function fillForm(){
+    if(!P) return;
+    M.x.value=P.x; M.y.value=P.y; M.w.value=P.w; M.h.value=P.h;
+    M.scale.value=Math.min(+M.scale.max,Math.max(+M.scale.min,P.w));
+    M.note.innerHTML=`Monitor work area: <b>${WORK[2]} × ${WORK[3]}</b> at ${WORK[0]}, ${WORK[1]}`+
+      (MONS.length>1?` · ${MONS.length} monitors`:'')+
+      '. Moving or resizing the window by hand is saved automatically.';
+  }
+  async function setOpen(o){
+    if(o){ await refreshPanel(); fillForm(); }
+    M.modal.classList.toggle('open',o);
+    M.scrim.style.display=o?'block':'none';
+  }
+  function markPreset(name){ document.querySelectorAll('#presetRow .chip').forEach(c=>c.classList.toggle('on',c.dataset.preset===name)); }
+  async function doSave(){
+    const a=pyw(); if(!a||!P) return false;
+    try{
+      const r=await a.save_panel(P.x,P.y,P.w,P.h);
+      if(r&&r.ok&&r.panel){ P=r.panel; fillForm(); return true; }
+      bLog('save_panel refused '+JSON.stringify(r));
+    }catch(e){ bLog('save_panel FAIL '+e); }
+    return false;
+  }
+
+  $('gear').onclick=()=>setOpen(true);
+  M.close.onclick=()=>setOpen(false);
+  M.scrim.onclick=()=>setOpen(false);
+  window.addEventListener('keydown',e=>{ if(e.key==='Escape') setOpen(false); });
+
+  [M.x,M.y,M.w,M.h].forEach(inp=>inp.addEventListener('input',()=>markPreset(null)));
+  M.scale.addEventListener('input',()=>{
+    const w=+M.w.value||P.w, h=+M.h.value||P.h, ratio=h/w;
+    M.w.value=+M.scale.value; M.h.value=Math.round(+M.scale.value*ratio); markPreset(null);
+  });
+
+  const PRESETS={
+    default:()=>({x:WORK[0]+(WORK[2]-1024)/2, y:WORK[1]+WORK[3]*0.14, w:1024, h:760}),
+    left:   ()=>({x:WORK[0]+24, y:WORK[1]+32, w:520, h:WORK[3]-64}),
+    right:  ()=>({x:WORK[0]+WORK[2]-544, y:WORK[1]+32, w:520, h:WORK[3]-64}),
+    center: ()=>{ const w=Math.min(1180,Math.round(WORK[2]*0.82)), h=Math.min(820,Math.round(WORK[3]*0.82));
+                  const ar=16/9, hh=Math.round(w/ar), H2=hh<=h?hh:Math.round(h*ar), W2=hh<=h?w:Math.round(h*ar);
+                  return {x:WORK[0]+(WORK[2]-W2)/2, y:WORK[1]+(WORK[3]-H2)/2, w:W2, h:H2}; },
+    full:   ()=>({x:WORK[0], y:WORK[1], w:WORK[2], h:WORK[3]}),
+  };
+  document.querySelectorAll('#presetRow .chip').forEach(chip=>{
+    chip.onclick=()=>{ const f=PRESETS[chip.dataset.preset]; if(!f) return; P=clampRect(f()); fillForm(); markPreset(chip.dataset.preset); };
+  });
+  M.defaults.onclick=async()=>{ P=clampRect(PRESETS.default()); fillForm(); markPreset('default'); await doSave(); };
+  M.apply.onclick=async()=>{
+    P=clampRect({x:+M.x.value, y:+M.y.value, w:+M.w.value, h:+M.h.value});
+    fillForm();
+    if(await doSave()) setOpen(false);
+  };
+  M.quit.onclick=async()=>{ const a=pyw(); if(a) await a.quit_app(); else window.close(); };
+})();
 </script>
 </body>
 </html>
