@@ -82,6 +82,7 @@ REDDIT_FEEDS = {
     "sydney": "https://www.reddit.com/r/sydney/top/.rss?t=day&limit=50",
 }
 REDDIT_REFRESH_S = 1800
+REDDIT_SPACING_S = 65             # Reddit RSS allows roughly one request a minute per client
 REDDIT_POOL_CAP = 50
 REDDIT_UA = "windows:LaneCoveInfoPanel:1.2 (personal desktop dashboard)"
 
@@ -151,8 +152,9 @@ class PolledStore:
     * refresh() wakes the loop early without blocking the caller.
     """
 
-    def __init__(self, name, fetch, interval, initial_delay=0):
+    def __init__(self, name, fetch, interval, initial_delay=0, retry_min=RETRY_MIN_S):
         self.name, self._fetch, self.interval = name, fetch, interval
+        self._retry_min = retry_min
         self._initial_delay = initial_delay
         self._lock = threading.Lock()
         self._wake = threading.Event()
@@ -189,7 +191,7 @@ class PolledStore:
     def _next_wait(self):
         if not self._failures:
             return self.interval
-        return min(self.interval, RETRY_MIN_S * 2 ** (self._failures - 1))
+        return min(self.interval, self._retry_min * 2 ** (self._failures - 1))
 
     def _loop(self):
         if self._initial_delay:
@@ -882,6 +884,46 @@ class API:
         except Exception as e:
             log.warning("applying saved geometry failed: %r", e)
 
+    # ---- frameless window: custom resize edges ----------------------------
+    def get_bounds(self):
+        """Current window rect in physical pixels (for the JS resize edges)."""
+        if os.name != "nt":
+            return {"ok": False}
+        hwnd = _hwnd_of(self._win)
+        r = _RECT32()
+        u = ctypes.windll.user32
+        u.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        if not hwnd or not u.GetWindowRect(hwnd, ctypes.byref(r)):
+            return {"ok": False}
+        return {"ok": True, "x": r.left, "y": r.top, "w": r.right - r.left, "h": r.bottom - r.top}
+
+    def set_bounds(self, x, y, w, h):
+        """Live move/resize while an edge is dragged. Persisting happens via
+        the debounced moved/resized handlers, so this stays cheap."""
+        try:
+            w = int(max(PANEL_MIN_W, min(PANEL_MAX_W, w)))
+            h = int(max(PANEL_MIN_H, min(PANEL_MAX_H, h)))
+            hwnd = _hwnd_of(self._win)
+            if hwnd and os.name == "nt":
+                _set_window_pos(hwnd, int(x), int(y), w, h)
+            return {"ok": True}
+        except Exception as e:
+            log.warning("set_bounds failed: %r", e)
+            return {"ok": False, "error": str(e)}
+
+    def _style_frameless(self, *_):
+        """Windows 11: ask DWM for rounded corners on the frameless window
+        (no-op on Windows 10)."""
+        if os.name != "nt":
+            return
+        try:
+            hwnd = _hwnd_of(self._win)
+            pref = ctypes.c_int(2)                          # DWMWCP_ROUND
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(hwnd), 33, ctypes.byref(pref), ctypes.sizeof(pref))  # DWMWA_WINDOW_CORNER_PREFERENCE
+        except Exception:
+            pass
+
     def _set_animation_paused(self, paused):
         try:
             self._win.evaluate_js(f"window.__lc_pause && window.__lc_pause({'true' if paused else 'false'})")
@@ -899,7 +941,8 @@ def main():
     global _gallery_store
     _gallery_store = gallery = PolledStore("gallery", gallery_fetch_once, GALLERY_REFRESH_S).start()
     feeds = {name: PolledStore(name, (lambda u=url: reddit_fetch(u)), REDDIT_REFRESH_S,
-                               initial_delay=5 + 20 * i).start()
+                               initial_delay=5 + REDDIT_SPACING_S * i,
+                               retry_min=REDDIT_SPACING_S).start()
              for i, (name, url) in enumerate(REDDIT_FEEDS.items())}
     api = API(weather, news, gallery, feeds)
 
@@ -908,11 +951,13 @@ def main():
         WINDOW_TITLE, url=HTML_PATH, js_api=api,
         x=panel["x"], y=panel["y"], width=panel["w"], height=panel["h"],
         min_size=(PANEL_MIN_W, PANEL_MIN_H), resizable=True,
+        frameless=True, easy_drag=False,     # no Windows title bar; page moves/resizes via get_bounds/set_bounds
         text_select=False, background_color="#06070c")
     api._win = window
 
     # Persist native moves/resizes; pause the background animation while minimised.
     for ev, handler in (("shown", api._apply_saved_geometry),
+                        ("shown", api._style_frameless),
                         ("moved", api._on_geometry_changed),
                         ("resized", api._on_geometry_changed),
                         ("minimized", lambda *_: api._set_animation_paused(True)),

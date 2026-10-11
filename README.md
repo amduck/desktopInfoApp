@@ -17,7 +17,7 @@ venv\Scripts\python app.py        (or pythonw.exe for no console)
 ```
 
 **Window**
-- Move or resize the window normally; its position and size are saved to `settings.json` automatically.
+- The window is frameless (no Windows title bar). Drag the top bar to move it; drag any edge or corner to resize. Position and size are saved to `settings.json` automatically. Use the – and ✕ buttons to minimise or quit.
 - ⚙ opens layout presets (left/right dock, centre, full work area) and exact X/Y/W/H. Positions are clamped per monitor, so a window on a second screen stays there.
 - Windows narrower than 760 px switch to a single-column layout.
 - The background animation runs at 30 fps, pauses while the window is minimised or hidden, and is a still image when Windows "Animation effects" is off (reduced motion).

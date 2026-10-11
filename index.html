@@ -39,6 +39,18 @@
     overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.15) transparent;
     transition:opacity .45s ease, transform .65s cubic-bezier(.22,.61,.36,1);
   }
+  /* ---------- frameless window chrome ---------- */
+  .topbar{cursor:move}
+  .topbar .btn{cursor:default}
+  .winborder{position:fixed;inset:0;z-index:20;pointer-events:none;border:1px solid rgba(255,255,255,.10)}
+  .rz{position:fixed;z-index:21}
+  .rz-n,.rz-s{left:12px;right:12px;height:5px;cursor:ns-resize}
+  .rz-n{top:0} .rz-s{bottom:0}
+  .rz-e,.rz-w{top:12px;bottom:12px;width:5px;cursor:ew-resize}
+  .rz-e{right:0} .rz-w{left:0}
+  .rz-ne,.rz-nw,.rz-se,.rz-sw{width:12px;height:12px}
+  .rz-ne{top:0;right:0;cursor:nesw-resize} .rz-sw{bottom:0;left:0;cursor:nesw-resize}
+  .rz-nw{top:0;left:0;cursor:nwse-resize} .rz-se{bottom:0;right:0;cursor:nwse-resize}
   /* ---------- settings modal ---------- */
   .modal{
     position:fixed; left:50%; top:50%; z-index:10; width:min(560px,92vw);
@@ -252,10 +264,16 @@
 </head>
 <body>
   <canvas id="bg"></canvas>
+  <!-- frameless window: resize handles (edges + corners) and a hairline border -->
+  <div class="rz rz-n" data-rz="n"></div><div class="rz rz-s" data-rz="s"></div>
+  <div class="rz rz-e" data-rz="e"></div><div class="rz rz-w" data-rz="w"></div>
+  <div class="rz rz-ne" data-rz="ne"></div><div class="rz rz-nw" data-rz="nw"></div>
+  <div class="rz rz-se" data-rz="se"></div><div class="rz rz-sw" data-rz="sw"></div>
+  <div class="winborder"></div>
   <div class="grain"></div>
   <div class="frame" id="frame">
 
-    <div class="topbar">
+    <div class="topbar" id="dragbar" title="Drag to move">
       <div class="brand">
         <span class="dot" id="liveDot"></span>
         <div class="loc">Lane Cove<small>NSW · Australia · -33.80, 151.19</small></div>
@@ -727,6 +745,50 @@ syncAnimation();
 /* ================= boot ================= */
 const __bootLog=[];
 function bLog(m){ __bootLog.push(`${Date.now()%100000}:${m}`); window.__lc_bootLog=__bootLog; }
+/* ============================================================
+   FRAMELESS MOVE + RESIZE — drag the top bar to move, an edge/corner
+   to resize. Python moves the native window (physical px) via
+   get_bounds/set_bounds; geometry is saved by Python's moved/resized
+   handlers. Pointer capture keeps events flowing even when a fast drag
+   outruns the window.
+   ============================================================ */
+(function(){
+  let drag=null, pending=null, inFlight=false;
+  async function pump(){
+    if(inFlight||!pending) return;
+    inFlight=true; const r=pending; pending=null;
+    try{ await pyw().set_bounds(r.x,r.y,r.w,r.h); }catch(_){}
+    inFlight=false; if(pending) requestAnimationFrame(pump);
+  }
+  function attach(el, dirOf, skip){
+    el.addEventListener('pointerdown',async e=>{
+      if(e.button!==0 || (skip && e.target.closest(skip))) return;
+      const api=pyw(); if(!api||!api.get_bounds) return;
+      e.preventDefault(); el.setPointerCapture(e.pointerId);
+      const start={sx:e.screenX, sy:e.screenY};
+      const b=await api.get_bounds(); if(!b||!b.ok) return;
+      drag={el, dir:dirOf(el), ...start, b, dpr:window.devicePixelRatio||1};
+    });
+    el.addEventListener('pointermove',e=>{
+      if(!drag||drag.el!==el) return;
+      const {dir,sx,sy,b,dpr}=drag, MIN_W=360, MIN_H=280;
+      const dx=Math.round((e.screenX-sx)*dpr), dy=Math.round((e.screenY-sy)*dpr);
+      let {x,y,w,h}=b;
+      if(dir==='move'){ x=b.x+dx; y=b.y+dy; }
+      else{
+        if(dir.includes('e')) w=Math.max(MIN_W,b.w+dx);
+        if(dir.includes('s')) h=Math.max(MIN_H,b.h+dy);
+        if(dir.includes('w')){ w=Math.max(MIN_W,b.w-dx); x=b.x+b.w-w; }
+        if(dir.includes('n')){ h=Math.max(MIN_H,b.h-dy); y=b.y+b.h-h; }
+      }
+      pending={x,y,w,h}; requestAnimationFrame(pump);
+    });
+    const end=e=>{ if(drag&&drag.el===el){ drag=null; try{ el.releasePointerCapture(e.pointerId); }catch(_){} } };
+    el.addEventListener('pointerup',end); el.addEventListener('pointercancel',end);
+  }
+  document.querySelectorAll('.rz').forEach(el=>attach(el, el=>el.dataset.rz));
+  attach($('dragbar'), ()=>'move', '.btn,button,a,input,select');
+})();
 window.addEventListener('unhandledrejection',e=>bLog(`unhandledrej:${e.reason}`));
 window.addEventListener('error',e=>bLog(`windowerr:${e.message}@${e.lineno}`));
 
