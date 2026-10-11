@@ -34,7 +34,7 @@
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   }
   .frame{
-    position:relative;z-index:2;height:100%;display:grid;grid-template-rows:auto 1fr;
+    position:relative;z-index:2;height:100%;display:grid;grid-auto-rows:auto;align-content:start;
     grid-template-columns:1.15fr .85fr;gap:26px;padding:34px 40px 34px;
     overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.15) transparent;
     transition:opacity .45s ease, transform .65s cubic-bezier(.22,.61,.36,1);
@@ -128,7 +128,10 @@
   .btn:active{transform:scale(.94)}
 
   /* ---------------- hero ---------------- */
-  .hero{display:flex;flex-direction:column;justify-content:center;gap:6px;min-width:0}
+  /* weather row: left column spans exactly the height of the forecast cards —
+     condition aligns with the top card, stat tiles with the bottom of the outlook */
+  .hero{display:flex;flex-direction:column;justify-content:space-between;gap:6px;min-width:0}
+  .hero .cond{margin-top:2px}
   .cond{font-size:20px;font-weight:650;letter-spacing:.02em;display:flex;align-items:center;gap:12px}
   .cond svg{width:26px;height:26px;filter:drop-shadow(0 0 10px color-mix(in srgb,var(--accent) 55%,transparent))}
   .temp{
@@ -141,7 +144,7 @@
   .sub b{color:var(--ink);font-weight:750}
 
   /* stat tiles */
-  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:30px}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:22px}
   .stat{
     border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.012));
     border-radius:16px;padding:16px 16px 15px;backdrop-filter:blur(6px);
@@ -156,6 +159,12 @@
 
   /* ---------------- forecast column ---------------- */
   .fore{display:flex;flex-direction:column;gap:18px;min-width:0;overflow:visible}
+  .fore .card:last-child{flex:1;display:flex;flex-direction:column}
+  .fore .card:last-child #days{flex:1;display:flex;flex-direction:column;justify-content:space-between}
+  /* list panels in the same row are the same height */
+  .newsec{display:flex;min-width:0}
+  .newsec .card{flex:1;display:flex;flex-direction:column}
+  .newsec .news-items{flex:1}
   .card{
     border:1px solid var(--line);border-radius:18px;padding:18px 20px;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.01));
     backdrop-filter:blur(8px);
