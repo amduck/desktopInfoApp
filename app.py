@@ -29,6 +29,7 @@ import re
 import threading
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import xml.sax.saxutils as sax
@@ -72,6 +73,17 @@ WEATHER_URL = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode
     "past_days": 1,               # gives 3 h of pressure history just after midnight
     "forecast_days": 4,
 })
+
+# Reddit: unauthenticated .json has returned 403 since May 2026; the public
+# RSS (Atom) feeds still work but Reddit has announced they will be switched
+# off (reported date: 13 Nov 2026). Feeds are ordered by score already.
+REDDIT_FEEDS = {
+    "reddit": "https://www.reddit.com/r/popular/top/.rss?t=day&limit=50",
+    "sydney": "https://www.reddit.com/r/sydney/top/.rss?t=day&limit=50",
+}
+REDDIT_REFRESH_S = 1800
+REDDIT_POOL_CAP = 50
+REDDIT_UA = "windows:LaneCoveInfoPanel:1.2 (personal desktop dashboard)"
 
 NEWS_FEEDS = [
     ("World", "https://feeds.bbci.co.uk/news/world/rss.xml"),
@@ -139,8 +151,9 @@ class PolledStore:
     * refresh() wakes the loop early without blocking the caller.
     """
 
-    def __init__(self, name, fetch, interval):
+    def __init__(self, name, fetch, interval, initial_delay=0):
         self.name, self._fetch, self.interval = name, fetch, interval
+        self._initial_delay = initial_delay
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._data = None
@@ -179,6 +192,8 @@ class PolledStore:
         return min(self.interval, RETRY_MIN_S * 2 ** (self._failures - 1))
 
     def _loop(self):
+        if self._initial_delay:
+            time.sleep(self._initial_delay)
         while True:
             self.run_once()
             self._wake.wait(self._next_wait())
@@ -352,6 +367,56 @@ def news_fetch_once():
         raise RuntimeError("feeds returned no usable stories")
     return {"pool": pool_top, "count": len(pool_top), "fetched_ts": time.time(),
             "feeds_ok": len(NEWS_FEEDS) - len(errors), "feed_count": len(NEWS_FEEDS)}
+
+
+# ------------------------------------------------------------------ reddit
+ATOM = "{http://www.w3.org/2005/Atom}"
+
+
+def _age_label(ts, now=None):
+    if ts is None:
+        return ""
+    s = max(0, (now or time.time()) - ts)
+    if s < 3600:
+        return f"{int(s // 60)}m"
+    if s < 86400:
+        return f"{int(s // 3600)}h"
+    return f"{int(s // 86400)}d"
+
+
+def parse_reddit_atom(raw, now=None):
+    """Reddit RSS is Atom: <entry><title/><link href/><category term label/>
+    <published/>…</entry>. Keeps feed order (already ranked by score)."""
+    root = ET.fromstring(raw)
+    out, seen = [], set()
+    for e in root.findall(ATOM + "entry"):
+        title = sax.unescape((e.findtext(ATOM + "title") or "").strip())
+        link_el = e.find(ATOM + "link")
+        link = (link_el.get("href") if link_el is not None else "") or ""
+        if not title or not link.startswith("https://") or link in seen:
+            continue
+        seen.add(link)
+        cat = e.find(ATOM + "category")
+        sub = (cat.get("label") or ("r/" + cat.get("term", ""))) if cat is not None else ""
+        ts = _parse_date(e.findtext(ATOM + "published") or e.findtext(ATOM + "updated"))
+        out.append({"t": title, "u": link, "c": sub, "ts": ts, "age": _age_label(ts, now)})
+    return out[:REDDIT_POOL_CAP]
+
+
+def reddit_fetch(url):
+    try:
+        raw = _http_get(url, "application/atom+xml, application/xml", to=15, ua=REDDIT_UA)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403, 404, 410):
+            raise RuntimeError(f"Reddit refused the feed (HTTP {e.code}) — "
+                               "its RSS access may have been switched off") from None
+        if e.code == 429:
+            raise RuntimeError("Reddit rate limit (HTTP 429) — will retry") from None
+        raise
+    pool = parse_reddit_atom(raw)
+    if not pool:
+        raise RuntimeError("Reddit feed returned no posts")
+    return {"pool": pool, "count": len(pool), "fetched_ts": time.time()}
 
 
 # ----------------------------------------------------------------- gallery
@@ -670,8 +735,9 @@ class API:
     """JS bridge. Reads return snapshots; refresh_* only signal the
     background threads, so no bridge call ever waits on the network."""
 
-    def __init__(self, weather, news, gallery):
+    def __init__(self, weather, news, gallery, feeds=None):
         self._weather, self._news, self._gallery = weather, news, gallery
+        self._feeds = feeds or {}           # extra list panels by name, e.g. Reddit
         self._win = None
         self._save_timer = None
 
@@ -696,6 +762,16 @@ class API:
     def refresh_gallery(self):
         self._gallery.refresh()
         return {"ok": True}
+
+    def get_feed(self, name):
+        st = self._feeds.get(name)
+        return st.snapshot() if st else {"ok": False, "error": f"unknown feed {name!r}", "data": None}
+
+    def refresh_feed(self, name):
+        st = self._feeds.get(name)
+        if st:
+            st.refresh()
+        return {"ok": bool(st)}
 
     # ---- browser ---------------------------------------------------------
     def open_url(self, url):
@@ -822,7 +898,10 @@ def main():
     news = PolledStore("news", news_fetch_once, NEWS_REFRESH_S).start()
     global _gallery_store
     _gallery_store = gallery = PolledStore("gallery", gallery_fetch_once, GALLERY_REFRESH_S).start()
-    api = API(weather, news, gallery)
+    feeds = {name: PolledStore(name, (lambda u=url: reddit_fetch(u)), REDDIT_REFRESH_S,
+                               initial_delay=5 + 20 * i).start()
+             for i, (name, url) in enumerate(REDDIT_FEEDS.items())}
+    api = API(weather, news, gallery, feeds)
 
     panel = panel_from_settings()
     window = webview.create_window(
